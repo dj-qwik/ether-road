@@ -19,39 +19,9 @@ const WORLD = (() => {
   let race = null, starPts = null, decor = null, theme = THEMES.void, themeKey = 'void';
   const cam = { pos: null, look: null, fov: 66, roll: 0, shake: 0 };
   const W = { pixelRatio: 1, frameMs: 16, slowFrames: 0 };
-  // ── spine + per-rail offsets (pure functions of s and the course layout)
-  function spine(s, out) {
-    out.x = 22 * Math.sin(s / 95) + 7 * Math.sin(s / 41 + 1.3);
-    out.y = 7 * Math.sin(s / 73) + 1.8 * Math.sin(s / 29);
-    out.z = -s;
-    return out;
-  }
-  function sectionOffset(sec, j, n, s, sign) {
-    const c = (n - 1) / 2, d = (j - c) * sign, u = clamp((s - sec.s0) / Math.max(1, sec.s1 - sec.s0), 0, 1);
-    switch (sec.kind) {
-      case 'launch': return [d * 3.0, 0];
-      case 'parallel': return [d * 3.3, Math.sin(s / 17 + j) * 0.25];
-      case 'solo': return [d * 13 + 4 * Math.sin(s / 31 + j * 1.7), ((j % 2) ? 1 : -1) * 2.6 * (sec.rise || 0) + 1.2 * Math.sin(s / 23 + j)];
-      case 'cross': return [d * 3.4 * Math.cos(Math.PI * u), d * 1.6 * Math.sin(Math.PI * u)];
-      case 'helix': { const a = (2 * Math.PI * j) / n + (sec.spin || 1) * u * 2 * Math.PI - Math.PI / 2; const R = 3.6 * Math.sin(Math.PI * Math.min(1, u * 1.15 + 0.08)) + 0.0001; const lin = d * 3.2 * (1 - Math.sin(Math.PI * u)); return [Math.cos(a) * R + lin, Math.sin(a) * R]; }
-      case 'merge': return [d * 2.85, 0];
-      default: return [d * 3, 0];
-    }
-  }
-  function buildLayout(course) {
-    let sign = 1;
-    return course.layout.map((L) => { const sec = { ...L, s0: SIM0.sAtT(L.t0), s1: SIM0.sAtT(L.t1), sign }; if (L.kind === 'cross') sign = -sign; sec.signEnd = sign; return sec; });
-  }
-  function railOffset(secs, j, n, s) {
-    let k = secs.length - 1; while (k > 0 && secs[k].s0 > s) k--;
-    const a = secs[k], o = sectionOffset(a, j, n, s, a.sign);
-    const B = 22; // blend distance either side of a boundary
-    const nb = secs[k + 1];
-    if (nb && s > nb.s0 - B) { const w = smooth((s - (nb.s0 - B)) / (2 * B)), o2 = sectionOffset(nb, j, n, s, nb.sign); return [lerp(o[0], o2[0], w), lerp(o[1], o2[1], w)]; }
-    const pb = secs[k - 1];
-    if (pb && s < a.s0 + B) { const w = smooth((s - (a.s0 - B)) / (2 * B)), o0 = sectionOffset(pb, j, n, s, pb.signEnd !== undefined && pb.kind === 'cross' ? pb.sign : pb.sign); return [lerp(o0[0], o[0], w), lerp(o0[1], o[1], w)]; }
-    return o;
-  }
+  let trackKey = 'nebula';
+  const spine = (s, out) => RAILGEO.spine(trackKey, s, out);
+  const spineFrame = (s) => RAILGEO.spineFrame(trackKey, s);
   // ── materials/geometries (built once)
   let M = null, G = null;
   function gridTexture() {
@@ -73,8 +43,8 @@ const WORLD = (() => {
     const hot = new T.Color(theme.hazard);
     M = {
       road: (() => { const g = gridTexture(); return new T.MeshStandardMaterial({ map: g, emissiveMap: g, emissive: new T.Color(theme.accent).multiplyScalar(0.18), color: 0xffffff, roughness: 0.55, metalness: 0.1 }); })(),
-      hotSolid: new T.MeshStandardMaterial({ color: 0x0a0508, emissive: hot, emissiveIntensity: 0.75, roughness: 0.35, metalness: 0.4 }),
-      hotGlow: new T.MeshBasicMaterial({ color: hot.clone().multiplyScalar(1.6), toneMapped: false }),
+      hotSolid: new T.MeshStandardMaterial({ color: 0x0a0508, emissive: hot, emissiveIntensity: 0.55, roughness: 0.35, metalness: 0.4 }),
+      hotGlow: new T.MeshBasicMaterial({ color: hot.clone().multiplyScalar(1.0), toneMapped: false }),
       hotGhost: new T.MeshBasicMaterial({ color: 0xbab4ff, transparent: true, opacity: 0.12, depthWrite: false, wireframe: true }),
       wallBody: new T.MeshStandardMaterial({ color: 0x14060b, emissive: hot, emissiveIntensity: 0.32, transparent: true, opacity: 0.88, roughness: 0.5 }),
       dim: new T.MeshStandardMaterial({ color: 0x15132a, emissive: 0x2b2650, emissiveIntensity: 0.6, roughness: 0.5 }),
@@ -106,7 +76,7 @@ const WORLD = (() => {
     W.key = key;
     composer = new T.EffectComposer(renderer);
     composer.addPass(new T.RenderPass(scene, camera));
-    bloom = new T.UnrealBloomPass(new T.Vector2(512, 512), 0.6, 0.32, 0.6);
+    bloom = new T.UnrealBloomPass(new T.Vector2(512, 512), 0.26, 0.3, 0.7); // ~55% below the first build
     if (location.hash.includes('nobloom')) bloom.enabled = false;
     composer.addPass(bloom);
     composer.addPass(new T.OutputPass());
@@ -145,31 +115,20 @@ const WORLD = (() => {
     race = null;
   }
   /** R: the round (createRound). me: seat index of this player (or -1). */
-  function setRace(R, me, key) {
+  function setRace(R, me, key, themeOverride) {
     clearRace();
-    if (key !== themeKey) setTheme(key);
+    trackKey = SIM0.TRACKS[key] ? key : 'nebula';
+    const th = THEMES[themeOverride] ? themeOverride : SIM0.TRACKS[trackKey].theme;
+    if (th !== themeKey) setTheme(th);
     const root = new T.Group(); scene.add(root); race0.me = me;
-    const course = R.course, n = R.active.length, secs = buildLayout(course);
-    const sMax = course.end + 60, DS = 1;
-    const rails = R.active.map((b, j) => {
-      const N = Math.ceil((sMax + 30) / DS) + 1, pos = new Float32Array(N * 3), side = new Float32Array(N * 3), up = new Float32Array(N * 3);
-      const sp = { x: 0, y: 0, z: 0 };
-      const P = (s) => { spine(s, sp); const [ox, oy] = railOffset(secs, j, n, s); const t = spineFrame(s); return [sp.x + t.sx * ox + t.ux * oy, sp.y + t.sy * ox + t.uy * oy, sp.z + t.sz * ox + t.uz * oy]; };
-      for (let k = 0; k < N; k++) { const s = -30 + k * DS, p = P(s); pos.set(p, k * 3); }
-      for (let k = 0; k < N; k++) {
-        const a = Math.max(0, k - 1), c = Math.min(N - 1, k + 1);
-        let tx = pos[c * 3] - pos[a * 3], ty = pos[c * 3 + 1] - pos[a * 3 + 1], tz = pos[c * 3 + 2] - pos[a * 3 + 2]; const tl = Math.hypot(tx, ty, tz) || 1; tx /= tl; ty /= tl; tz /= tl;
-        // side = T × up(0,1,0) normalised; up = side × T
-        let sx = -tz, sy = 0, sz = tx; const sl = Math.hypot(sx, sz) || 1; sx /= sl; sz /= sl;
-        const ux = sy * tz - sz * ty, uy = sz * tx - sx * tz, uz = sx * ty - sy * tx;
-        side.set([sx, sy, sz], k * 3); up.set([ux, uy, uz], k * 3);
-      }
-      return { b, j, N, pos, side, up, color: new T.Color(b.color) };
-    });
+    const course = R.course, n = R.active.length;
+    const sMax = course.end + 60;
+    const geo = RAILGEO.build(course, n, SIM0.sAtT, trackKey);
+    const rails = R.active.map((b, j) => ({ b, j, ...geo[j], color: new T.Color(b.color) }));
     // ribbons + edges
     for (const rl of rails) root.add(ribbon(rl, 0, RAIL_HALF, 0, M.road, true));
     for (const rl of rails) {
-      const mineRail = rl.b.i === me, edge = new T.MeshBasicMaterial({ color: rl.color.clone().multiplyScalar(mineRail || me < 0 ? 1.15 : 0.7), toneMapped: false });
+      const mineRail = rl.b.i === me, edge = new T.MeshBasicMaterial({ color: rl.color.clone().multiplyScalar(mineRail || me < 0 ? 0.85 : 0.55), toneMapped: false });
       const under = new T.MeshBasicMaterial({ color: rl.color.clone().multiplyScalar(0.35), transparent: true, opacity: 0.35, toneMapped: false, depthWrite: false, side: T.DoubleSide });
       for (const sgn of [-1, 1]) {
         root.add(ribbon(rl, sgn * (RAIL_HALF + 0.03), 0.06, 0.07, edge));
@@ -187,27 +146,20 @@ const WORLD = (() => {
     const spheres = rails.map((rl) => makeSphere(rl, root, rl.b.i === me));
     // decor along the spine
     const dec = makeDecor(root, sMax);
-    race = { R, me, rails, items, lo: 0, spheres, root, secs, dec, shards: [], waves: [], finale: false };
+    race = { R, me, rails, items, lo: 0, spheres, root, dec, shards: [], waves: [], finale: false };
     return race;
-  }
-  const spineTmp = { x: 0, y: 0, z: 0 }, spineTmp2 = { x: 0, y: 0, z: 0 };
-  function spineFrame(s) {
-    spine(s - 0.5, spineTmp); spine(s + 0.5, spineTmp2);
-    let tx = spineTmp2.x - spineTmp.x, ty = spineTmp2.y - spineTmp.y, tz = spineTmp2.z - spineTmp.z; const l = Math.hypot(tx, ty, tz); tx /= l; ty /= l; tz /= l;
-    let sx = -tz, sz = tx; const sl = Math.hypot(sx, sz); sx /= sl; sz /= sl;
-    return { sx, sy: 0, sz, ux: -sz * ty, uy: sz * tx - sx * tz, uz: sx * ty };
   }
   /** strip along a rail at lateral offset `off` (half width `hw`), lifted by `lift` along the rail's up. */
   function ribbon(rl, off, hw, lift, mat, uvs, vertical) {
-    const N = rl.N, v = new Float32Array(N * 2 * 3), uv = new Float32Array(N * 2 * 2), idx = [];
+    const ST = 2, N = Math.floor((rl.N - 1) / ST) + 1, v = new Float32Array(N * 2 * 3), uv = new Float32Array(N * 2 * 2), idx = []; // every 2nd sample (0.5 u) is plenty for the mesh
     for (let k = 0; k < N; k++) {
-      const p = k * 3;
+      const p = k * ST * 3;
       for (let e = 0; e < 2; e++) {
         const lat = vertical ? off : off + (e ? hw : -hw), h = vertical ? lift * (e ? 1 : 0) : lift;
         v[(k * 2 + e) * 3] = rl.pos[p] + rl.side[p] * lat + rl.up[p] * h;
         v[(k * 2 + e) * 3 + 1] = rl.pos[p + 1] + rl.side[p + 1] * lat + rl.up[p + 1] * h;
         v[(k * 2 + e) * 3 + 2] = rl.pos[p + 2] + rl.side[p + 2] * lat + rl.up[p + 2] * h;
-        uv[(k * 2 + e) * 2] = e; uv[(k * 2 + e) * 2 + 1] = (k - 30) / 8;
+        uv[(k * 2 + e) * 2] = e; uv[(k * 2 + e) * 2 + 1] = (k * ST * RAILGEO.STEP - 30) / 8;
       }
       if (k < N - 1) { const a = k * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } // counter-clockwise from above: faces up
     }
@@ -218,7 +170,7 @@ const WORLD = (() => {
   // frame of rail rl at distance s, lateral x, height y → world position (+ basis)
   const F = { p: null, t: null, side: null, up: null };
   function railAt(rl, s, x = 0, y = 0, out) {
-    const f = (s + 30), k = clamp(Math.floor(f), 0, rl.N - 2), w = clamp(f - k, 0, 1), a = k * 3, c = a + 3;
+    const f = (s + 30) / RAILGEO.STEP, k = clamp(Math.floor(f), 0, rl.N - 2), w = clamp(f - k, 0, 1), a = k * 3, c = a + 3;
     const px = lerp(rl.pos[a], rl.pos[c], w), py = lerp(rl.pos[a + 1], rl.pos[c + 1], w), pz = lerp(rl.pos[a + 2], rl.pos[c + 2], w);
     const sx = lerp(rl.side[a], rl.side[c], w), sy = lerp(rl.side[a + 1], rl.side[c + 1], w), sz = lerp(rl.side[a + 2], rl.side[c + 2], w);
     const ux = lerp(rl.up[a], rl.up[c], w), uy = lerp(rl.up[a + 1], rl.up[c + 1], w), uz = lerp(rl.up[a + 2], rl.up[c + 2], w);
@@ -257,6 +209,10 @@ const WORLD = (() => {
       case 'echo': it.parts.ghost = add(G.box, M.hotGhost, 1.4, 0.9, len, 0, 0.46, 0); it.parts.solid = add(G.box, M.hotSolid, 1.4, 0.9, len, 0, 0.46, 0); it.parts.ring = add(G.ring, M.marker, 1, 1, 1, 0, 0.03, 0); it.parts.ring.rotation.x = -Math.PI / 2; break;
       case 'pillar': it.parts.col = add(G.box, M.hotSolid, 1.2, 2.2, Math.max(0.9, len), 0, 1.1, 0); it.parts.ring = add(G.ring, M.marker, 1.1, 1.1, 1.1, 0, 0.03, 0); it.parts.ring.rotation.x = -Math.PI / 2; break;
       case 'crusher': it.parts.head = add(G.box, M.hotSolid, 1.42, 0.7, len, 0, 0.35, 0); add(G.box, M.dim, 0.1, 3.2, 0.1, -0.8, 1.6, 0); add(G.box, M.dim, 0.1, 3.2, 0.1, 0.8, 1.6, 0); add(G.box, M.hotGlow, 1.4, 0.04, len, 0, 0.02, 0); break;
+      case 'sweeper':
+        if (h.decoy) break;
+        it.parts.bar = add(G.box, M.hotSolid, 1.4, 0.5, Math.max(0.3, len), 0, 0.3, 0); it.parts.rail = add(G.box, M.dim, 3.4, 0.06, 0.08, x > 0 ? -0.8 : 0.8, 0.04, 0);
+        it.parts.from = (x > 0 ? -1 : 1) * 2 * LANE_X; break;
       case 'gate': case 'teeth':
         it.parts.panel = h.kind === 'gate' ? add(G.box, M.hotSolid, 1.45, 1.15, Math.max(0.18, len), 0, 0.58, 0) : add(G.box, M.hotSolid, 1.5, 0.16, 0.16, 0, 0.58, 0);
         if (h.kind === 'teeth') it.parts.panel2 = add(G.box, M.hotSolid, 0.16, 1.5, 0.16, 0, 0.58, 0);
@@ -266,10 +222,22 @@ const WORLD = (() => {
     }
     return it;
   }
+  const POWER_LOOK = { shield: 0x6fb7ff, magnet: 0xb48cff, double: 0xfff1a8 };
   function makeOrb(o, rl, root) {
     const lane = o.lane ^ rl.b.mirror, g = new T.Group(); orient(g, rl, o.s, laneX(lane), 0.55); g.visible = false; root.add(g);
-    const m = new T.Mesh(G.oct, M.orb); g.add(m);
-    const halo = new T.Sprite(new T.SpriteMaterial({ map: M.glowTex, color: 0xffd26b, transparent: true, opacity: 0.8, depthWrite: false, blending: T.AdditiveBlending })); halo.scale.set(1.4, 1.4, 1); g.add(halo);
+    const mine = rl.b.i === race0.me || race0.me < 0, col = o.power ? POWER_LOOK[o.power] : 0xffd26b;
+    let m;
+    if (!o.power) m = new T.Mesh(G.oct, M.orb);
+    else {
+      m = new T.Group();
+      const mat = new T.MeshBasicMaterial({ color: new T.Color(col).multiplyScalar(1.3), toneMapped: false });
+      if (o.power === 'shield') { m.add(new T.Mesh(new T.IcosahedronGeometry(0.34, 1), new T.MeshBasicMaterial({ color: col, wireframe: true, toneMapped: false }))); m.add(new T.Mesh(new T.IcosahedronGeometry(0.16, 0), mat)); }
+      else if (o.power === 'magnet') { const u = new T.Mesh(new T.TorusGeometry(0.22, 0.08, 8, 20, Math.PI), mat); u.rotation.z = Math.PI; m.add(u); for (const x of [-0.22, 0.22]) { const tip = new T.Mesh(G.box, new T.MeshBasicMaterial({ color: 0xffffff })); tip.scale.set(0.17, 0.12, 0.17); tip.position.set(x, 0.05, 0); m.add(tip); } }
+      else { for (const x of [-0.15, 0.15]) { const d = new T.Mesh(G.oct, mat); d.scale.setScalar(0.8); d.position.x = x; m.add(d); } }
+      if (!mine) m.scale.setScalar(0.8);
+    }
+    g.add(m);
+    const halo = new T.Sprite(new T.SpriteMaterial({ map: M.glowTex, color: col, transparent: true, opacity: o.power ? 0.6 : 0.45, depthWrite: false, blending: T.AdditiveBlending })); halo.scale.set(1.3, 1.3, 1); g.add(halo);
     return { orb: o, rl, g, m, s0: o.s - 4, s1: o.s + 2, kind: 'orb' };
   }
   function nameTag(text, color) {
@@ -283,11 +251,11 @@ const WORLD = (() => {
   }
   function makeSphere(rl, root, isMe) {
     const col = rl.color, g = new T.Group(); root.add(g);
-    const shell = new T.Mesh(G.sph, new T.MeshPhysicalMaterial({ color: 0x07070c, metalness: 0.85, roughness: 0.16, clearcoat: 1, clearcoatRoughness: 0.08, transparent: true, opacity: 0.7, emissive: col, emissiveIntensity: 0.06 }));
-    const core = new T.Mesh(G.core, new T.MeshBasicMaterial({ color: col.clone().multiplyScalar(1.7), toneMapped: false }));
-    const band = new T.Mesh(G.band, new T.MeshBasicMaterial({ color: col.clone().multiplyScalar(1.5), toneMapped: false }));
-    const band2 = band.clone(); band2.rotation.y = Math.PI / 2;
-    const spin = new T.Group(); spin.add(shell, core, band, band2); g.add(spin);
+    const skin = SKINLAB.build(rl.b.skin | 0, col, SPHERE_R), spin = skin.spin; g.add(spin, skin.extra);
+    // power-up visuals: shield bubble, magnet ring, ×2 sparkle
+    const shieldM = new T.Mesh(new T.IcosahedronGeometry(SPHERE_R * 1.55, 1), new T.MeshBasicMaterial({ color: 0x6fb7ff, wireframe: true, transparent: true, opacity: 0.7, toneMapped: false })); shieldM.visible = false; g.add(shieldM);
+    const magnetM = new T.Mesh(new T.TorusGeometry(SPHERE_R * 1.8, 0.03, 6, 48), new T.MeshBasicMaterial({ color: 0xb48cff, transparent: true, opacity: 0.85, toneMapped: false })); magnetM.rotation.x = Math.PI / 2; magnetM.visible = false; g.add(magnetM);
+    const dblM = new T.Mesh(G.oct, new T.MeshBasicMaterial({ color: 0xfff1a8, toneMapped: false })); dblM.scale.setScalar(0.35); dblM.visible = false; g.add(dblM);
     const halo = new T.Sprite(new T.SpriteMaterial({ map: M.glowTex, color: col, transparent: true, opacity: 0.35, depthWrite: false, blending: T.AdditiveBlending })); halo.scale.set(1.8, 1.8, 1); g.add(halo);
     const light = new T.PointLight(col, isMe ? 2.2 : 1.4, 6, 2); light.position.set(0, 0.4, 0); g.add(light);
     // trail ribbon
@@ -297,7 +265,7 @@ const WORLD = (() => {
     const trail = new T.Mesh(tg, new T.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide, toneMapped: false }));
     trail.frustumCulled = false; root.add(trail);
     const tag = isMe ? null : nameTag(`${rl.b.glyph} ${rl.b.name}`, rl.b.color); if (tag) root.add(tag);
-    return { rl, g, spin, shell, core, band, halo, light, trail, tag, hist: [], dead: false, roll: 0, x: laneX(rl.b.cl), isMe };
+    return { rl, g, spin, extra: skin.extra, halo, light, trail, tag, hist: [], dead: false, roll: 0, x: laneX(rl.b.cl), isMe, shieldM, magnetM, dblM };
   }
   function makeDecor(root, sMax) {
     const grp = new T.Group(); root.add(grp);
@@ -356,6 +324,11 @@ const WORLD = (() => {
           const y = f < h.duty ? 0.35 : f < h.duty + 0.2 ? 0.35 + 2.0 * smooth((f - h.duty) / 0.2) : 2.35 - 2.0 * Math.pow(clamp((f - 0.85) / 0.15, 0, 1), 3);
           P.head.position.y = y; break;
         }
+        case 'sweeper': {
+          if (!P.bar) break;
+          const k = clamp((t - (h.on - 0.14)) / 0.14, 0, 1); P.bar.position.x = P.from * (1 - smooth(k));
+          break;
+        }
         case 'gate': case 'teeth': {
           P.panel.visible = on; P.off.visible = !on; if (P.panel2) P.panel2.visible = on;
           if (h.kind === 'teeth') { P.panel.rotation.z = t * 9; P.panel2.rotation.z = t * 9; }
@@ -386,8 +359,15 @@ const WORLD = (() => {
         sp.g.visible = false; sp.light.intensity = 0; if (sp.tag) sp.tag.visible = false;
       } else { sp.dead = false; sp.g.visible = true; }
       sp.g.position.set(f.x, f.y, f.z);
-      sp.roll += (speedAt(Math.max(0, t)) * dt) / SPHERE_R; sp.spin.rotation.x = -sp.roll; sp.band.rotation.z = now * 2;
-      sp.core.scale.setScalar(1 + 0.08 * Math.sin(now * 9.4));
+      sp.roll += (speedAt(Math.max(0, t)) * dt) / SPHERE_R; sp.spin.rotation.x = -sp.roll;
+      for (const o of sp.extra.children) if (o.userData.orbit) o.rotation.z = now * o.userData.orbit;
+      // orient the sphere's group along its rail so rolling looks right
+      sp.g.quaternion.setFromRotationMatrix(_m().makeBasis(new T.Vector3(f.sx, f.sy, f.sz), new T.Vector3(f.ux, f.uy, f.uz), new T.Vector3(-f.tx, -f.ty, -f.tz).normalize()));
+      sp.shieldM.visible = !!v.shield && v.alive; if (sp.shieldM.visible) { sp.shieldM.rotation.y = now * 1.5; sp.shieldM.rotation.x = now * 0.7; }
+      if (v.shieldPop && !sp.popped) { sp.popped = true; const pf = railAt(sp.rl, ss, v.x, SPHERE_R); burst(pf, new T.Color(0x6fb7ff), false, 0.5); }
+      if (!v.shieldPop) sp.popped = false;
+      sp.magnetM.visible = !!v.magnet && v.alive; if (sp.magnetM.visible) sp.magnetM.scale.setScalar(1 + 0.08 * Math.sin(now * 12));
+      sp.dblM.visible = !!v.double && v.alive; if (sp.dblM.visible) { sp.dblM.position.set(Math.cos(now * 5) * 0.6, 0.45, Math.sin(now * 5) * 0.6); sp.dblM.rotation.y = now * 6; }
       // trail
       // trail: a fixed length of road behind the sphere (frame-rate independent), bending with recent lane changes
       if (v.alive) { sp.hist.unshift([ss, v.x]); while (sp.hist.length > 2 && sp.hist[sp.hist.length - 1][0] < ss - 8) sp.hist.pop(); }
@@ -405,7 +385,7 @@ const WORLD = (() => {
     const e = railAt(rl, sNow - cam.dist, cam.lx * 0.55, cam.h), l = railAt(rl, sNow + 11, cam.lx * 0.3, 0.25);
     // a new subject (spectating, results) eases over instead of jumping
     if (cam.subject !== rl || view.snap) { cam.from = cam.subject && !view.snap ? { x: cam.pos.x, y: cam.pos.y, z: cam.pos.z, lx: cam.look.x, ly: cam.look.y, lz: cam.look.z } : null; cam.blend = 0; cam.subject = rl; }
-    cam.blend = Math.min(1, (cam.blend ?? 1) + dt * 1.8);
+    cam.blend = Math.min(1, (cam.blend ?? 1) + Math.max(dt, (now - (cam.lastNow || now))) * 1.8); cam.lastNow = now;
     const b = cam.from ? smooth(cam.blend) : 1;
     cam.pos.x = cam.from ? lerp(cam.from.x, e.x, b) : e.x; cam.pos.y = cam.from ? lerp(cam.from.y, e.y, b) : e.y; cam.pos.z = cam.from ? lerp(cam.from.z, e.z, b) : e.z;
     cam.look.x = cam.from ? lerp(cam.from.lx, l.x, b) : l.x; cam.look.y = cam.from ? lerp(cam.from.ly, l.y, b) : l.y; cam.look.z = cam.from ? lerp(cam.from.lz, l.z, b) : l.z;
@@ -422,7 +402,7 @@ const WORLD = (() => {
     W.key.position.set(cam.pos.x + 4, cam.pos.y + 10, cam.pos.z + 6); W.key.target.position.set(cam.look.x, cam.look.y, cam.look.z);
     // finale: the merge arena glows harder; chromatic theme drifts hue
     if (theme.shift) { const c = new T.Color().setHSL((now * 0.02) % 1, 0.7, 0.045, T.SRGBColorSpace); scene.fog.color.copy(c); scene.background.copy(c); }
-    bloom.strength = 0.6 + (t > COLLAPSE_AT && view.phase === 'play' ? 0.25 : 0) + (view.phase === 'done' ? 0.3 : 0);
+    bloom.strength = 0.26 + (t > COLLAPSE_AT && view.phase === 'play' ? 0.1 : 0) + (view.phase === 'done' ? 0.12 : 0);
     if (race.dec.userData.pts) race.dec.userData.pts.rotation.y = 0;
     render(dt);
   }
@@ -437,9 +417,9 @@ const WORLD = (() => {
     pa.needsUpdate = true; ca.needsUpdate = true;
   }
   // elimination: shell fractures into bright shards and a colour-coded shock ring
-  function burst(f, color, big) {
+  function burst(f, color, big, scale = 1) {
     const mat = new T.MeshBasicMaterial({ color: color.clone().multiplyScalar(2.6), toneMapped: false, transparent: true });
-    for (let k = 0; k < (big ? 34 : 22); k++) {
+    for (let k = 0; k < Math.round((big ? 34 : 22) * scale); k++) {
       const m = new T.Mesh(G.tetra, mat); m.position.set(f.x, f.y, f.z);
       const a = Math.random() * 6.283, u = Math.random() * 1.6 - 0.2, sp = 4 + Math.random() * 9;
       m.userData.v = new T.Vector3(Math.cos(a) * sp * 0.6 + f.tx * 3, u * sp, Math.sin(a) * sp * 0.6 + f.tz * 3); m.userData.spin = new T.Vector3(Math.random() * 9, Math.random() * 9, 0);

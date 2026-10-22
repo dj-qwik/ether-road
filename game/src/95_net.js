@@ -18,7 +18,7 @@ const NET = (() => {
     N.status = 'connecting';
     const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws');
     N.ws = ws;
-    ws.onopen = () => { N.backoff = 0; send({ t: 'hello', name: N.name, token: N.token }); ping(); };
+    ws.onopen = () => { N.backoff = 0; send({ t: 'hello', name: N.name, token: N.token, skin: mySkin() }); ping(); };
     ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } try { on(m); } catch (err) { console.error('net', m.t, err); } };
     ws.onclose = () => { if (N.ws !== ws) return; N.status = 'off'; if (N.wanted) setTimeout(connect, Math.min(5000, 300 * 2 ** N.backoff++)); };
   }
@@ -109,7 +109,7 @@ const NET = (() => {
   const P = { b: null };
   function predictMe(R, tickNow) {
     const me = R.spheres.find((b) => b.i === game.me); if (!me || !R.active.includes(me)) return null;
-    const b = { mirror: me.mirror, target: me.target, from: me.from, cl: me.cl, swapT: me.swapT, buf: me.buf, lastTap: me.lastTap, taps: me.taps, alive: me.alive, deathTick: me.deathTick };
+    const b = { mirror: me.mirror, target: me.target, from: me.from, cl: me.cl, swapT: me.swapT, buf: me.buf, lastTap: me.lastTap, taps: me.taps, alive: me.alive, deathTick: me.deathTick, shield: me.shield, immuneS: me.immuneS };
     if (!b.alive || R.winner) return b;
     const pend = N.taps.slice(N.confirmed), H = R.course.blocks;
     let pi = 0;
@@ -119,8 +119,8 @@ const NET = (() => {
       const s = SIM0.sAtTick(k), t = k * DT;
       for (let q = lowerBlock(H, s - 60); q < H.length; q++) {
         const h = H[q]; if (h.s0 - SPHERE_R >= s) break;
-        if (h.s1 + SPHERE_R <= s || (h.lane ^ b.mirror) !== b.cl) continue;
-        if (SIM0.hazardOn(h, t)) { b.alive = false; b.deathTick = k; break; }
+        if (h.s1 + SPHERE_R <= s || (h.lane ^ b.mirror) !== b.cl || s < b.immuneS) continue;
+        if (SIM0.hazardOn(h, t)) { if (b.shield) { b.shield = 0; b.immuneS = h.s1 + SPHERE_R + 0.5; break; } b.alive = false; b.deathTick = k; break; }
       }
       if (!b.alive) break;
     }
@@ -153,7 +153,7 @@ const NET = (() => {
       const tickNow = Math.floor(t * 60);
       const pb = predictMe(R, tickNow);
       if (pb && P.b && P.b.target !== pb.target && pb.alive) SFX.lane(pb.target);
-      if (pb && P.b && P.b.alive && !pb.alive) { SFX.crash(true); $('#flash').classList.add('on'); setTimeout(() => $('#flash').classList.remove('on'), 60); WORLD.shake(1.2); }
+      if (pb && P.b && P.b.alive && !pb.alive) { SFX.crash(true); padRumble(1, 380); $('#flash').classList.add('on'); setTimeout(() => $('#flash').classList.remove('on'), 60); WORLD.shake(1.2); }
       P.b = pb;
       if (R.winner && !N.over) { N.over = true; roundOver(); }
     }
@@ -180,8 +180,8 @@ const NET = (() => {
     return {
       t: tDraw, s: sDraw, phase: game.phase, follow,
       spheres: R.active.map((b) => {
-        if (b.i === game.me && pb) return { i: b.i, x: sphereX(pb, frac), alive: pb.alive, deadS: SIM0.sAtTick(pb.deathTick), winner: R.winner === b };
-        return { i: b.i, x: sphereX(b, 0), alive: b.alive, deadS: SIM0.sAtTick(b.deathTick), winner: R.winner === b };
+        if (b.i === game.me && pb) return { i: b.i, x: sphereX(pb, frac), alive: pb.alive, deadS: SIM0.sAtTick(pb.deathTick), winner: R.winner === b, ...powersOf(b, R) };
+        return { i: b.i, x: sphereX(b, 0), alive: b.alive, deadS: SIM0.sAtTick(b.deathTick), winner: R.winner === b, ...powersOf(b, R) };
       }),
     };
   }
@@ -221,7 +221,7 @@ const NET = (() => {
     else if (t.id === 'netFind') {
       N.name = ($('#netName')?.value || '').trim().slice(0, 14) || 'Racer'; store.set('er_name', N.name);
       N.wanted = true; N.err = '';
-      if (N.ws && N.ws.readyState === 1) { send({ t: 'hello', name: N.name, token: N.token }); send({ t: 'queue', mode: 'free', size: N.queueSize }); }
+      if (N.ws && N.ws.readyState === 1) { send({ t: 'hello', name: N.name, token: N.token, skin: mySkin() }); send({ t: 'queue', mode: 'free', size: N.queueSize }); }
       else { N.queueing = true; connect(); }
       t.disabled = true; t.textContent = 'Connecting…';
     }
@@ -248,5 +248,5 @@ const NET = (() => {
   }
   // connection quality in the corner during a race
   setInterval(() => { const el = $('#net'); if (!el) return; const on = game.mode === 'online' && game.screen === 'match'; el.hidden = !on; if (on) el.textContent = N.ws && N.ws.readyState === 1 ? `${Math.round(N.rtt)} ms` : 'Reconnecting…'; }, 500);
-  return { enabled, frame, view, send, connectAsync, request, get state() { return N; }, set over(v) { N.over = v; } };
+  return { enabled, frame, view, send, setSkin: (k) => send({ t: 'skin', skin: k }), connectAsync, request, get state() { return N; }, set over(v) { N.over = v; } };
 })();

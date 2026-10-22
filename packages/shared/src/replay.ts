@@ -7,7 +7,7 @@ import { type Address, type Hex, getAddress, keccak256, stringToHex } from 'viem
  */
 export interface RoundReplay {
   n: number // round number, 1-based
-  key: string // track theme key (themes share identical rules; the seed decides the track)
+  key: string // track key (sets the hazard mix and rail layout; the seed builds the course)
   seedReveal: Hex // 32 random bytes; keccak256(seedReveal) is the round's seed commitment
   active: number[] // seats racing (everyone in the roster)
   players: { i: number; speedMul: number }[] // every seat in the match
@@ -15,12 +15,12 @@ export interface RoundReplay {
   inputs: number[][] // per tick: packed input of each active seat, in `active` order
 }
 
-/** Canonical track-theme list: stageId = index + 1 (stable forever; APPEND ONLY so past evidence keeps its meaning). */
-export const ARENA_KEYS = ['void', 'solar', 'ultraviolet', 'chromatic', 'vector', 'prism', 'signal', 'ion'] as const
+/** Canonical track list: stageId = index + 1 (stable forever; APPEND ONLY so past evidence keeps its meaning). */
+export const ARENA_KEYS = ['nebula', 'helix', 'canyon', 'cathedral', 'storm', 'ghost'] as const
 
 export function stageIdOf(key: string): number {
   const i = (ARENA_KEYS as readonly string[]).indexOf(key)
-  if (i < 0) throw new Error(`unknown track theme ${key}`)
+  if (i < 0) throw new Error(`unknown track ${key}`)
   return i + 1
 }
 

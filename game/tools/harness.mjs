@@ -23,7 +23,9 @@ export function reactionProfile(ms) {
  * Run one race. players: [{ ai?, skill? }]. controllers[i] (optional) plays seat i: (ctx) => true to tap this tick,
  * where ctx = { tick, t, s, me, R }. Returns the finished round.
  */
-export function runRace(G, players, controllers = {}, key = 'void') {
+let rot = 0
+export function runRace(G, players, controllers = {}, key = null) {
+  if (!key) { const ks = Object.keys(G.sim.TRACKS); key = ks[rot++ % ks.length] } // rotate through every track
   const sim = G.createSim({ seed: r32() })
   const ps = players.map((p, i) => ({ i, name: 'P' + i, skill: p.skill ?? 0.85, ai: p.ai || null }))
   const R = sim.createRound({ key, seed: r32(), players: ps, active: ps.map((p) => p.i), botSalt: String(r32()) }, {})

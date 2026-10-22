@@ -33,14 +33,67 @@ addEventListener('pointerdown', (e) => {
   if (!INPUT.enabled || e.target.closest('.card, button, header, a, input, .wallet')) return;
   tapNow();
 }, { passive: true });
-let padPrev = false;
+// ── controllers (standard mapping: Xbox, PlayStation, Switch Pro, 8BitDo…). In a race any face button, bumper,
+// trigger or d-pad press switches lanes. In menus: d-pad / left stick moves between buttons, A (✕) presses,
+// B (○) goes back, Start presses the main button. Rumble on crashes, shield hits and power-ups where supported.
+const PAD = { connected: false, prev: [], navAt: 0, lastDir: '', used: false };
+addEventListener('gamepadconnected', () => { PAD.connected = true; document.body.classList.add('pad'); });
+addEventListener('gamepaddisconnected', () => { PAD.connected = [...(navigator.getGamepads ? navigator.getGamepads() : [])].some(Boolean); document.body.classList.toggle('pad', PAD.connected); });
+const RACE_BUTTONS = [0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 14, 15];
+function padRumble(strength = 0.5, ms = 120) {
+  for (const p of navigator.getGamepads ? navigator.getGamepads() : []) {
+    const v = p && p.vibrationActuator; if (!v) continue;
+    try { v.playEffect ? v.playEffect('dual-rumble', { duration: ms, strongMagnitude: strength, weakMagnitude: Math.min(1, strength * 1.3) }) : v.pulse && v.pulse(strength, ms); } catch {}
+  }
+}
 function pollPad() {
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-  let down = false;
-  for (const p of pads) if (p) for (const b of p.buttons) if (b.pressed) down = true;
-  if (down && !padPrev) tapNow();
-  padPrev = down;
+  for (let pi = 0; pi < pads.length; pi++) {
+    const p = pads[pi]; if (!p) continue;
+    const prev = PAD.prev[pi] || [], now = p.buttons.map((b) => b.pressed || b.value > 0.5);
+    const edge = (k) => now[k] && !prev[k];
+    PAD.prev[pi] = now;
+    if (now.some(Boolean) && !PAD.used) { PAD.used = true; PAD.connected = true; document.body.classList.add('pad'); }
+    if (INPUT.enabled) { if (RACE_BUTTONS.some(edge)) { tapNow(); } continue; }
+    // menus
+    const ax = p.axes[0] || 0, ay = p.axes[1] || 0;
+    const dir = now[12] || ay < -0.6 ? 'up' : now[13] || ay > 0.6 ? 'down' : now[14] || ax < -0.6 ? 'left' : now[15] || ax > 0.6 ? 'right' : '';
+    const t = performance.now();
+    if (dir && (dir !== PAD.lastDir || t - PAD.navAt > 220)) { PAD.navAt = t; padNav(dir); }
+    PAD.lastDir = dir;
+    if (edge(0)) padPress();
+    if (edge(1)) padBack();
+    if (edge(9)) padStart();
+  }
 }
+const navTargets = () => [...document.querySelectorAll('#ov button:not([disabled]), #ov input, #ov a.btn, #ov label.check, header button')].filter((e) => e.offsetParent !== null);
+function padFocus(el) { if (!el) return; document.querySelectorAll('.padfocus').forEach((e) => e.classList.remove('padfocus')); el.classList.add('padfocus'); el.focus({ preventScroll: false }); el.scrollIntoView({ block: 'nearest' }); }
+function padNav(dir) {
+  const list = navTargets(); if (!list.length) return;
+  const cur = document.querySelector('.padfocus');
+  if (!cur || !list.includes(cur)) return padFocus(list.find((e) => e.closest('#ov')) || list[0]);
+  const a = cur.getBoundingClientRect(), ac = { x: a.left + a.width / 2, y: a.top + a.height / 2 };
+  let best = null, bestD = 1e9;
+  for (const e of list) {
+    if (e === cur) continue;
+    const r = e.getBoundingClientRect(), c = { x: r.left + r.width / 2, y: r.top + r.height / 2 }, dx = c.x - ac.x, dy = c.y - ac.y;
+    const ok = dir === 'up' ? dy < -4 : dir === 'down' ? dy > 4 : dir === 'left' ? dx < -4 : dx > 4;
+    if (!ok) continue;
+    const along = dir === 'up' || dir === 'down' ? Math.abs(dy) : Math.abs(dx), across = dir === 'up' || dir === 'down' ? Math.abs(dx) : Math.abs(dy);
+    const d = along + across * 2.2;
+    if (d < bestD) { bestD = d; best = e; }
+  }
+  if (best) { padFocus(best); if (typeof SFX !== 'undefined') SFX.ui(); }
+}
+function padPress() {
+  const cur = document.querySelector('.padfocus');
+  if (cur && navTargets().includes(cur)) { if (cur.matches('label.check')) cur.querySelector('input').click(); else cur.click(); return; }
+  padFocus(navTargets()[0]);
+}
+function padBack() { const b = document.querySelector('#ov #back, #ov #walletBack, #ov #cashBack, #ov #netLeave, #ov #home, #ov #dbgClose'); if (b) b.click(); }
+function padStart() { const b = document.querySelector('#ov .btn.primary:not([disabled])'); if (b) b.click(); }
+// keep a controller focus on screen after menus redraw
+new MutationObserver(() => { if (PAD.used && !document.querySelector('#ov .padfocus') && !INPUT.enabled) { const first = document.querySelector('#ov .btn.primary:not([disabled])') || navTargets()[0]; if (first) setTimeout(() => padFocus(first), 0); } }).observe(document.getElementById('ov') || document.body, { childList: true, subtree: true });
 
 // ───────────────────────── AUDIO: original synthesized soundtrack + effects ─────────────────────────
 // Everything is generated with Web Audio at 144 BPM (the race's beat: gates and crushers move on it). The race
@@ -144,6 +197,8 @@ const SFX = {
   orb() { if (!actx) return; const t = actx.currentTime; [88, 92, 95, 100].forEach((m, k) => osc('sine', midiHz(m), t + k * 0.04, 0.14, 0.06, sfxBus, 0.002)); },
   crash(me) { if (!actx) return; const t = actx.currentTime; noiseHit(t, me ? 0.7 : 0.35, me ? 0.5 : 0.18, 1800, 0.6, 'bandpass', sfxBus, 120); osc('sawtooth', 300, t, 0.5, me ? 0.12 : 0.05, sfxBus, 0.002, 40); },
   pass() { if (!actx) return; noiseHit(actx.currentTime, 0.4, 0.05, 600, 1.2, 'bandpass', sfxBus, 3200); },
+  power() { if (!actx) return; const t = actx.currentTime; [76, 83, 88, 95].forEach((m, k) => osc('triangle', midiHz(m), t + k * 0.05, 0.18, 0.06, sfxBus, 0.002)); },
+  shieldPop() { if (!actx) return; const t = actx.currentTime; noiseHit(t, 0.3, 0.2, 4000, 0.8, 'highpass', sfxBus); osc('sine', 1400, t, 0.3, 0.08, sfxBus, 0.002, 300); },
   count(n) { if (!actx) return; osc('triangle', n > 0 ? 660 : 1320, actx.currentTime, n > 0 ? 0.14 : 0.4, 0.09, sfxBus); },
   win() { if (!actx) return; const t = actx.currentTime; [69, 73, 76, 81, 85].forEach((m, k) => osc('triangle', midiHz(m), t + k * 0.08, 0.3, 0.07, sfxBus)); },
   lose() { if (!actx) return; const t = actx.currentTime; [64, 60, 57].forEach((m, k) => osc('triangle', midiHz(m), t + k * 0.12, 0.25, 0.06, sfxBus)); },

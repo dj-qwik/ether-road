@@ -26,6 +26,16 @@ with sync_playwright() as p:
         for k, ms in enumerate([2500, 5000, 8000, 12000]):
             pg.wait_for_timeout(ms - (0 if k == 0 else [2500, 5000, 8000, 12000][k-1]))
             pg.screenshot(path=f'{out}/race{k}.png')
+    if script == 'skins':
+        pg.click('#goSkins'); pg.wait_for_timeout(1500); pg.screenshot(path=f'{out}/skins.png')
+    if script == 'tracks':
+        pg.evaluate("() => { localStorage.setItem('er_lab', '1') }")
+        for i, key in enumerate(['nebula', 'helix', 'canyon', 'cathedral', 'storm', 'ghost']):
+            pg.evaluate("(k) => { LAB.configure(({ track: k, theme: 'track', seed: '', start: 18, speed: 1, n: 4, bots: 'hard', kind: 'all', god: true, auto: true })); LAB.open(); }", key)
+            pg.wait_for_timeout(300)
+            if i == 0: pg.screenshot(path=f'{out}/lab.png')
+            pg.evaluate("() => { const S = JSON.parse(localStorage.getItem('er_lab_cfg')); document.querySelector('#labGo').click(); }")
+            pg.wait_for_timeout(2600); pg.screenshot(path=f'{out}/track_{key}.png')
     print('\n'.join(logs[-30:]))
     b.close()
 srv.shutdown()

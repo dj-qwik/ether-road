@@ -77,6 +77,19 @@ for (const [name, ctl] of Object.entries(LAZY)) {
   for (let j = 1; j < 4; j++) if (wins[j] > wins[j - 1] * 1.1 + 4) fails.push(`SKILL ${ms[j]} ms wins more than ${ms[j - 1]} ms`)
 }
 
+// TRACKS: every track paces within the same envelope; power-ups show up and get used
+for (const key of Object.keys(G.sim.TRACKS)) {
+  const L = [], F = []; let powers = 0, shieldSaves = 0, races = quick ? 30 : 80
+  for (let k = 0; k < races; k++) {
+    const R = runRace(G, Array.from({ length: 4 }, () => ({ ai: reactionProfile(220) })), {}, key)
+    L.push(R.t); const d = R.active.filter((b) => !b.alive).map((b) => b.deathTick / 60); if (d.length) F.push(Math.min(...d))
+    powers += R.course.orbs.filter((o) => o.power).length; shieldSaves += R.active.filter((b) => b.shieldUsedTick).length
+  }
+  console.log(`TRACK ${key.padEnd(10)} median ${q(L, 0.5).toFixed(0)} s · p90 ${q(L, 0.9).toFixed(0)} s · first out ${q(F, 0.5).toFixed(0)} s · ${(powers / races).toFixed(1)} power-ups per race · shields saved a racer ${shieldSaves}×`)
+  if (q(L, 0.9) > 60.0001 || q(F, 0.5) < 15 || q(F, 0.5) > 48) fails.push(`TRACK ${key} pacing out of range`)
+  if (powers / races < 2.5) fails.push(`TRACK ${key} too few power-ups`)
+}
+
 console.log(`${fails.length ? 'FAIL' : 'PASS'} acceptance (${((Date.now() - t0) / 1000).toFixed(0)} s)`)
 for (const f of fails.slice(0, 20)) console.log('   ✗ ' + f)
 process.exit(fails.length ? 1 : 0)

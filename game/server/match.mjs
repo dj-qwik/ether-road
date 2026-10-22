@@ -63,7 +63,7 @@ export class Match {
   get open() { return this.state === 'lobby' && this.seats.length < this.size }
   join(conn, profile) {
     if (!this.open) return null
-    const seat = { i: this.seats.length, kind: 'human', name: profile.name, user: profile.user, wallet: profile.wallet || null, conn, connected: true, taps: [], ready: false }
+    const seat = { i: this.seats.length, kind: 'human', name: profile.name, skin: profile.skin | 0, user: profile.user, wallet: profile.wallet || null, conn, connected: true, taps: [], ready: false }
     this.seats.push(seat)
     if (this.mode === 'free' && !this.fillAt) this.fillAt = Date.now() + T.FILL_MS
     this.broadcastLobby()
@@ -86,7 +86,7 @@ export class Match {
   start() {
     // free play tops up with bots so nobody waits forever; cash matches never contain bots
     if (this.mode === 'free') while (this.seats.length < this.size) {
-      this.seats.push({ i: this.seats.length, kind: 'bot', name: this.names[this.seats.length % this.names.length], skill: BOT_SKILL[0] + Math.random() * (BOT_SKILL[1] - BOT_SKILL[0]), connected: true, taps: [] })
+      this.seats.push({ i: this.seats.length, kind: 'bot', name: this.names[this.seats.length % this.names.length], skin: crypto.randomInt(24), skill: BOT_SKILL[0] + Math.random() * (BOT_SKILL[1] - BOT_SKILL[0]), connected: true, taps: [] })
     }
     this.wins = this.seats.map(() => 0)
     this.hook(this, 'start')
@@ -99,10 +99,10 @@ export class Match {
   }
 
   // ───────────── the race
-  playersCfg() { return this.seats.map((s) => ({ i: s.i, name: s.name, skill: s.kind === 'bot' ? s.skill : 0.85 })) }
+  playersCfg() { return this.seats.map((s) => ({ i: s.i, name: s.name, skin: s.skin | 0, skill: s.kind === 'bot' ? s.skill : 0.85 })) } // skin: cosmetic, never affects the race
   nextRound() {
     this.roundNo++
-    const key = drawTheme(this.themes); this.history.push(key)
+    const key = drawTheme(this.themes); this.history.push(key) // a random track (shuffled deck: all six before any repeat)
     const active = this.seats.map((s) => s.i)
     const seedReveal = newSeedReveal(), seed = simSeed(seedReveal)
     this.rec = []

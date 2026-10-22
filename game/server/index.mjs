@@ -152,7 +152,7 @@ function startCashMatch(L) {
   m.seats = L.roster.map((wallet, i) => {
     const c = L.waiting.get(wallet.toLowerCase())
     const sess = c?.session
-    const seat = { i, kind: 'human', name: sess?.name || wallet.slice(0, 6) + '…' + wallet.slice(-4), wallet, conn: c || null, connected: !!c, taps: [], ready: false }
+    const seat = { i, kind: 'human', name: sess?.name || wallet.slice(0, 6) + '…' + wallet.slice(-4), skin: sess?.skin || 0, wallet, conn: c || null, connected: !!c, taps: [], ready: false }
     if (c) { c.match = m; c.seat = seat; if (sess) { sess.match = m; sess.seat = seat } }
     return seat
   })
@@ -193,6 +193,7 @@ wss.on('connection', (ws, req) => {
   })
 })
 
+const cleanSkin = (v, d = 0) => (Number.isInteger(+v) && +v >= 0 && +v < 24 ? +v : d) // cosmetic sphere skin (0–23)
 const cleanName = (s) => String(s || '').replace(/[^\p{L}\p{N} _.\-]/gu, '').trim().slice(0, 14)
 function handle(conn, m) {
   switch (m.t) {
@@ -200,7 +201,7 @@ function handle(conn, m) {
       // resume a session (reconnect after a dropped connection / page reload) or start a new guest one
       let tok = typeof m.token === 'string' && sessions.has(m.token) ? m.token : null
       if (!tok) { tok = crypto.randomBytes(18).toString('base64url'); sessions.set(tok, { user: 'guest:' + tok.slice(0, 8), name: cleanName(m.name), match: null, seat: null }) }
-      const s = sessions.get(tok); s.name = cleanName(m.name || s.name)
+      const s = sessions.get(tok); s.name = cleanName(m.name || s.name); s.skin = cleanSkin(m.skin, s.skin)
       conn.session = s
       s.nonce = crypto.randomBytes(12).toString('hex')
       conn.sendJson({ t: 'welcome', token: tok, name: s.name, sizes: FREE_SIZES, tick: T.TICK_MS, D: T.DELAY_TICKS, nonce: s.nonce, wallet: s.wallet || null, cash: cash ? cash.publicConfig() : null })
@@ -212,6 +213,7 @@ function handle(conn, m) {
       }
       return
     }
+    case 'skin': if (conn.session) { conn.session.skin = cleanSkin(m.skin, conn.session.skin); if (conn.seat && conn.match && conn.match.state === 'lobby') conn.seat.skin = conn.session.skin } return
     case 'ping': return conn.sendJson({ t: 'pong', c: m.c, w: m.w, s: Date.now() })
   }
   if (m.t === 'auth') return void auth(conn, m)
@@ -224,7 +226,7 @@ function handle(conn, m) {
       if (m.mode === 'cash') return void queueCash(conn, m)
       if (m.mode !== 'free') return
       const match = findOrCreate('free', size, null)
-      const seat = match.join(conn, { name: S.name || 'Player', user: S.user })
+      const seat = match.join(conn, { name: S.name || 'Player', user: S.user, skin: S.skin || 0 })
       if (!seat) return conn.sendJson({ t: 'error', code: 'full', msg: 'That lobby just filled. Try again.' })
       conn.match = match; conn.seat = seat; S.match = match; S.seat = seat
       return

@@ -211,7 +211,7 @@ export async function createCash({ createMatch, onLobbyChange }) {
     const lobbyId = crypto.randomUUID()
     const L = { lobbyId, matchId: matchIdFromLobby(lobbyId), stakeWei, size, state: 'opening', depositors: [], waiting: new Map(), deadline: Date.now() + ADMISSION_SECONDS * 1000, createdAt: Date.now() }
     C.lobbies.set(L.matchId, L)
-    lobbyEscrow.open({ lobbyId, region: 'oregon', capacity: size, stakeWei, admissionSeconds: ADMISSION_SECONDS, rulesVersion: RULES_VERSION, stagePoolVersion: 'themes-8' })
+    lobbyEscrow.open({ lobbyId, region: 'oregon', capacity: size, stakeWei, admissionSeconds: ADMISSION_SECONDS, rulesVersion: RULES_VERSION, stagePoolVersion: 'tracks-6' })
       .then(async ({ hash }) => {
         const rc = await pub.waitForTransactionReceipt({ hash, timeout: 180000 })
         if (rc.status !== 'success') throw new Error('createMatch reverted')

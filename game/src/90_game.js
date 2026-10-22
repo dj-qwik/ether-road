@@ -65,13 +65,23 @@ function homeCard() {
         : NET.enabled() ? '<button class="btn primary big" id="goOnline">Race online</button>' : ''}
       <button class="btn big${cash || NET.enabled() ? ' ghost' : ' primary'}" id="goPractice">Practice</button>
     </div>
+    <div class="row"><button class="btn ghost skinbtn" id="goSkins"><img src="${SKINLAB.thumbnails(new THREE.Color('#22E6FF'))[mySkin()]}" alt="">Sphere: ${esc(SKINS[mySkin()].name)}</button>${LAB.unlocked() ? '<button class="btn ghost" id="goLab">Test lab</button>' : ''}</div>
     <div class="facts">
       <div><b>2–4</b><span>racers, one road each, braided together</span></div>
       <div><b>60 s</b><span>at most. The final collapse settles it</span></div>
       <div><b>90%</b><span>of the pot to the last sphere alive</span></div>
     </div>
-    <p class="ctl">${isTouch ? 'Tap anywhere to switch lanes.' : '<kbd>Space</kbd>, a click, or any arrow key switches lanes. That is the whole control scheme.'}</p>
+    <p class="ctl"><span class="no-pad">${isTouch ? 'Tap anywhere to switch lanes.' : '<kbd>Space</kbd>, a click, any arrow key, or any controller button switches lanes. That is the whole control scheme.'}</span><span class="pad-only">Controller ready: any face button, bumper or trigger switches lanes. D-pad moves through menus, <kbd>A</kbd> picks, <kbd>B</kbd> goes back.</span></p>
     <p class="fine" style="padding:0">${CASH.enabled() ? (CASH.state.cfg.chainId === 4663 ? 'Real ETH on Robinhood Chain. Only stake what you can afford to lose.' : 'Robinhood Chain testnet: stakes are free test ETH from the Robinhood faucet. No real money.') : NET.enabled() ? 'Free online races need no wallet. Paid races open once the server finishes its setup.' : 'Practice runs entirely in this browser.'}</p>
+  </div>`;
+}
+function skinsCard() {
+  const th = SKINLAB.thumbnails(new THREE.Color('#22E6FF')), cur = mySkin();
+  return `<div class="card lobby skins">
+    <h2>Your sphere</h2>
+    <p>Every sphere handles exactly the same. Your racer colour still marks your rail and name.</p>
+    <div class="skingrid">${SKINS.map((k) => `<button class="skin${k.id === cur ? ' sel' : ''}" data-skin="${k.id}" title="${esc(k.note)}"><img src="${th[k.id]}" alt=""><span>${esc(k.name)}</span></button>`).join('')}</div>
+    <div class="row"><button class="btn primary" id="skinsDone">Done</button><span class="label">${esc(SKINS[cur].name)}: ${esc(SKINS[cur].note)}</span></div>
   </div>`;
 }
 function practiceCard() {
@@ -79,11 +89,11 @@ function practiceCard() {
     <h2>Practice</h2>
     <p>Race computer players on a fresh road. Nothing is at stake.</p>
     <div style="display:grid;gap:6px"><span class="label">Racers</span><div class="seg">${SIZES.map((s) => `<button class="${s === game.size ? 'sel' : ''}" data-psize="${s}">${s}<small>${s === 2 ? 'you + 1' : `you + ${s - 1}`}</small></button>`).join('')}</div></div>
-    <div style="display:grid;gap:6px"><span class="label">Computer players</span><div class="seg">${[['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Sharp']].map(([k, l]) => `<button class="${k === game.bots ? 'sel' : ''}" data-pbots="${k}">${l}</button>`).join('')}</div></div>
+    <div style="display:grid;gap:6px"><span class="label">Computer players</span><div class="seg">${[['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Sharp'], ['flawless', 'Flawless']].map(([k, l]) => `<button class="${k === game.bots ? 'sel' : ''}" data-pbots="${k}">${l}</button>`).join('')}</div></div>
     <div class="row"><button class="btn primary big" id="practiceGo">Start</button><button class="btn ghost" id="back">Back</button></div>
   </div>`;
 }
-const HOWTO = ['Your sphere rolls forward on its own. Tap to switch lanes.', 'Red is solid. Faint outlines are not solid yet: read the timers.', 'Gates and crushers move on the beat. Gold orbs break ties at the 60 s cap.'];
+const HOWTO = ['Your sphere rolls forward on its own. Tap to switch lanes.', 'Red is solid. Faint outlines are not solid yet: read the timers.', 'Power-ups sit in the risky lane: a shield, an orb magnet, double orbs.', 'Gold orbs break ties at the 60 s cap.'];
 function introCard(seconds, online) {
   const A = SIM0.ARENAS[game.key] || SIM0.ARENAS.void;
   return `<div class="card intro">
@@ -114,6 +124,9 @@ $('#ov').addEventListener('click', (e) => {
   SFX.ui();
   if (game.mode === 'online' && ['again', 'home', 'ready'].includes(t.id)) return; // handled by NET
   if (t.id === 'goPractice') { game.screen = 'practice'; showOverlay(practiceCard()); }
+  else if (t.id === 'goSkins') { game.screen = 'skins'; showOverlay(skinsCard()); }
+  else if (t.dataset.skin) { store.set('er_skin', t.dataset.skin); NET.setSkin && NET.setSkin(+t.dataset.skin); showOverlay(skinsCard()); }
+  else if (t.id === 'skinsDone') { game.screen = 'home'; showOverlay(homeCard()); }
   else if (t.dataset.psize) { game.size = +t.dataset.psize; showOverlay(practiceCard()); }
   else if (t.dataset.pbots) { game.bots = t.dataset.pbots; showOverlay(practiceCard()); }
   else if (t.id === 'practiceGo' || (t.id === 'again' && game.mode === 'practice')) startPractice();
@@ -122,39 +135,45 @@ $('#ov').addEventListener('click', (e) => {
 });
 $('#faucet').addEventListener('click', () => { if (CASH.state.cfg && CASH.state.privy) return; setWallet(wallet + parseEth('0.05')); SFX.orb(); });
 
-// ───────────────────────── local races: practice and the attract loop behind the home screen ─────────────────────────
-function localRace(players, me, mode) {
-  const seed = (Math.random() * 4294967296) >>> 0;
-  game.key = pickTheme(); game.players = players; game.me = me; game.mode = mode; game.outSeen = new Set(); game.lastOrbs = 0;
-  game.R = createSim({ seed }).createRound({ key: game.key, seed, players, active: players.map((p) => p.i), botSalt: String(seed) });
-  WORLD.setRace(game.R, me, game.key);
+// ───────────────────────── local races: practice, the lab and the attract loop behind the home screen ─────────────────────────
+// game.clock = race milliseconds (negative during the countdown); advanced every frame × game.speed (lab only).
+const randomSkin = () => Math.floor(Math.random() * SKIN_COUNT);
+const mySkin = () => { const v = +store.get('er_skin'); return v >= 0 && v < SKIN_COUNT ? v : 0; };
+function localRace(players, me, mode, o = {}) {
+  const seed = o.seed != null ? o.seed >>> 0 : (Math.random() * 4294967296) >>> 0;
+  game.key = o.key || pickTheme(); game.players = players; game.me = me; game.mode = mode; game.outSeen = new Set(); game.lastOrbs = 0; game.seed = seed;
+  game.R = createSim({ seed }).createRound({ key: game.key, seed, players, active: players.map((p) => p.i), botSalt: String(seed), debug: o.debug });
+  WORLD.setRace(game.R, me, game.key, o.theme);
 }
 function startAttract() {
   const names = [...BOT_NAMES].sort(() => Math.random() - 0.5);
-  localRace([0, 1, 2, 3].map((i) => ({ i, name: names[i], skill: 0.6 + Math.random() * 0.35 })), -1, 'attract');
-  game.phase = 'play'; game.t0 = performance.now() - 2500; INPUT.enabled = false;
+  localRace([0, 1, 2, 3].map((i) => ({ i, name: names[i], skill: 0.6 + Math.random() * 0.35, skin: randomSkin() })), -1, 'attract');
+  game.phase = 'play'; game.clock = 2500; game.speed = 1; game.lab = null; INPUT.enabled = false;
 }
-function startPractice() {
-  const lvl = { easy: [0.5, 0.65], normal: [0.66, 0.8], hard: [0.84, 0.94] }[game.bots];
+function practicePlayers(n, lvl) {
   const names = [...BOT_NAMES].sort(() => Math.random() - 0.5);
-  const ps = Array.from({ length: game.size }, (_, i) => (i === 0 ? { i, name: 'You', human: true } : { i, name: names[i], skill: lvl[0] + Math.random() * (lvl[1] - lvl[0]) }));
-  localRace(ps, 0, 'practice');
+  return Array.from({ length: n }, (_, i) => (i === 0 ? { i, name: 'You', human: true, skin: mySkin() } : { i, name: names[i], skill: lvl === 'flawless' ? 1 : lvl[0] + Math.random() * (lvl[1] - lvl[0]), skin: randomSkin(), ...(lvl === 'flawless' ? { ai: { react: 0, sigma: 0, fool: 0, lapse: 0, greed: 0.8, aim: 0 } } : {}) }));
+}
+const BOT_LEVELS = { easy: [0.5, 0.65], normal: [0.66, 0.8], hard: [0.84, 0.94], flawless: 'flawless' };
+function startPractice() {
+  localRace(practicePlayers(game.size, BOT_LEVELS[game.bots]), 0, 'practice');
+  game.lab = null; game.speed = 1;
   game.screen = 'match'; game.phase = 'intro'; game.introUntil = performance.now() + 6000;
   document.body.classList.add('playing'); musicStop();
   showOverlay(introCard(6, false)); $('#hud').hidden = false; renderHud(true);
 }
 function beginCountdown(ms = 3000) {
   if (game.phase !== 'intro') return;
-  showOverlay(''); game.phase = 'countdown'; game.t0 = performance.now() + ms; INPUT.taps.length = 0; INPUT.enabled = true;
+  showOverlay(''); game.phase = 'countdown'; game.clock = -ms; INPUT.taps.length = 0; INPUT.enabled = true;
   musicRace(ms / 1000); game.lastCount = 0;
 }
 function goHome() {
-  document.body.classList.remove('playing'); game.screen = 'home'; $('#hud').hidden = true; callout('');
+  document.body.classList.remove('playing'); game.screen = 'home'; $('#hud').hidden = true; callout(''); game.lab = null; LAB.hud(false);
   INPUT.enabled = false; musicMenu(); startAttract(); showOverlay(homeCard());
 }
 
 // ───────────────────────── per-frame ─────────────────────────
-function stepLocal(now) {
+function stepLocal(now, dt) {
   const R = game.R;
   if (game.phase === 'intro') {
     const left = Math.max(0, (game.introUntil - now) / 1000), el = $('#introLeft'), bar = $('#introFill');
@@ -163,34 +182,34 @@ function stepLocal(now) {
     return;
   }
   if (game.phase === 'countdown') {
-    const left = (game.t0 - now) / 1000, n = Math.ceil(left);
+    game.clock += dt * 1000;
+    const n = Math.ceil(-game.clock / 1000);
     if (n !== game.lastCount && n > 0) { game.lastCount = n; SFX.count(n); callout(String(n), ['#B6FF3B', '#22E6FF', '#FF3DCB'][n - 1] || '#fff'); }
-    if (left <= 0) { game.phase = 'play'; SFX.count(0); callout('GO', '#22E6FF'); }
-    return;
+    if (game.clock >= 0) { game.phase = 'play'; SFX.count(0); callout('GO', '#22E6FF'); }
+    else { INPUT.taps.length = 0; return; } // taps before GO don't count
   }
   if (game.phase !== 'play') return;
-  const due = Math.min(RACE_TICKS, Math.floor((now - game.t0) / TICK_MS));
+  if (game.phase === 'play') game.clock += dt * 1000 * (game.speed || 1);
+  const due = Math.min(RACE_TICKS, Math.floor(game.clock / TICK_MS));
   let n = 0;
-  while (!R.winner && R.tick < due && n++ < 30) {
+  while (!R.winner && R.tick < due && n++ < 240) {
     const inputs = {};
-    if (game.me >= 0 && !game.auto) {
-      const k = R.tick + 1; let tap = false;
-      while (INPUT.taps.length && Math.floor((INPUT.taps[0] - game.t0) / TICK_MS) + 1 <= k) { INPUT.taps.shift(); tap = true; break; }
-      inputs[game.me] = tap ? TAP : 0;
-    }
+    if (game.me >= 0 && !game.auto && !(game.lab && game.lab.auto)) inputs[game.me] = INPUT.taps.length ? (INPUT.taps.shift(), TAP) : 0; // one tap per tick, in order
     stepWithFx(() => R.step(inputs));
   }
   if (R.winner && game.phase === 'play') raceOver();
 }
 // one tick plus everything the player should hear and see because of it
 function stepWithFx(step) {
-  const R = game.R, me = R.spheres.find((b) => b.i === game.me), before = me ? { target: me.target, orbs: me.orbs, alive: me.alive } : null;
+  const R = game.R, me = R.spheres.find((b) => b.i === game.me), before = me ? { target: me.target, orbs: me.orbs, alive: me.alive, got: me.got.length, used: me.shieldUsedTick } : null;
   const prevT = R.t;
   step();
   if (me && before && game.mode !== 'online') { // online: your own sounds come from the prediction (95_net)
     if (me.target !== before.target) { SFX.lane(me.target); game.flipTick = R.tick; }
     if (me.orbs > before.orbs) { SFX.orb(); }
-    if (before.alive && !me.alive) { SFX.crash(true); $('#flash').classList.add('on'); setTimeout(() => $('#flash').classList.remove('on'), 60); WORLD.shake(1.2); }
+    else if (me.got.length > before.got) { const o = R.course.orbs.find((x) => x.id === me.got[me.got.length - 1]); if (o && o.power) { SFX.power(); callout(o.power === 'shield' ? 'SHIELD' : o.power === 'magnet' ? 'MAGNET' : 'DOUBLE ORBS', o.power === 'shield' ? '#6FB7FF' : o.power === 'magnet' ? '#B48CFF' : '#FFF1A8', o.power === 'shield' ? 'The next hit passes through you' : o.power === 'magnet' ? 'Orbs in both lanes for 4 s' : 'Orbs count twice for 6 s'); padRumble(0.3, 80); } }
+    if (me.shieldUsedTick !== before.used) { SFX.shieldPop(); padRumble(0.6, 160); }
+    if (before.alive && !me.alive) { SFX.crash(true); padRumble(1, 380); $('#flash').classList.add('on'); setTimeout(() => $('#flash').classList.remove('on'), 60); WORLD.shake(1.2); }
   }
   for (const b of R.active) if (!b.alive && !game.outSeen.has(b.i)) {
     game.outSeen.add(b.i);
@@ -204,18 +223,18 @@ function stepWithFx(step) {
   if (game.mode !== 'online' && me && me.alive && R.tick - game.flipTick < 14 && R.tick - game.flipTick > 2) {
     for (const h of R.course.blocks) {
       if (h.s0 - SPHERE_R > R.s || h.s0 - SPHERE_R <= R.s - speedAt(R.t) * DT) continue;
-      if ((h.lane ^ me.mirror) === 1 - me.cl && SIM0.hazardOn(h, R.t)) { SFX.near(); game.flipTick = -99; break; }
+      if ((h.lane ^ me.mirror) === 1 - me.cl && SIM0.hazardOn(h, R.t)) { SFX.near(); padRumble(0.15, 50); game.flipTick = -99; break; }
     }
   }
 }
 function raceOver() {
   const R = game.R, w = R.winner;
   game.phase = 'done'; game.doneAt = performance.now(); INPUT.enabled = false;
-  if (game.mode === 'attract') { setTimeout(() => { if (game.mode === 'attract' && game.screen === 'home') startAttract(); }, 2500); return; }
+  if (game.mode === 'attract') { setTimeout(() => { if (game.mode === 'attract' && (game.screen === 'home' || game.screen === 'skins')) startAttract(); }, 2500); return; }
   callout(w.i === game.me ? 'YOU WIN' : `${w.name.toUpperCase()} WINS`, w.color);
   if (w.i === game.me) SFX.win(); else SFX.lose();
   renderHud(true);
-  setTimeout(() => { if (game.phase === 'done' && game.R === R) { musicMenu(); showOverlay(resultCard()); } }, 1900);
+  setTimeout(() => { if (game.phase === 'done' && game.R === R) { musicMenu(); showOverlay(game.lab ? LAB.resultCard() : resultCard()); } }, game.lab ? 900 : 1900);
 }
 
 // ───────────────────────── HUD ─────────────────────────
@@ -224,33 +243,35 @@ function renderHud(force) {
   const R = game.R; if (!R || $('#hud').hidden) return;
   const t = game.phase === 'play' ? Math.min(RACE_SECONDS, R.t) : game.phase === 'done' ? R.t : 0, left = Math.max(0, Math.ceil(RACE_SECONDS - t));
   const ring = $('#hRing'); if (ring) { ring.setAttribute('stroke-dashoffset', String(163.4 * clamp(t / RACE_SECONDS, 0, 1))); ring.setAttribute('stroke', t >= COLLAPSE_AT ? '#FF2E5B' : '#22e6ff'); }
-  const key = `${left}|${game.phase}|${R.active.map((b) => `${b.alive ? 1 : 0}${b.orbs}`).join('')}`;
+  const key = `${left}|${game.phase}|${R.active.map((b) => `${b.alive ? 1 : 0}${b.orbs}${b.shield}${R.tick < b.magnetT ? 1 : 0}${R.tick < b.doubleT ? 1 : 0}`).join('')}`;
   if (!force && key === lastHud) return; lastHud = key;
   $('#hTime').textContent = left; $('#hClock').classList.toggle('low', game.phase === 'play' && left <= 10);
   $('#hPhase').textContent = t >= COLLAPSE_AT ? 'Final collapse' : 'Last sphere alive wins';
-  $('#hField').innerHTML = R.active.map((b) => `<div class="racer${b.i === game.me ? ' you' : ''}${b.alive ? '' : ' out'}" style="--c:${b.color}"><i></i>${esc(b.i === game.me ? 'You' : b.name)}${b.orbs ? ` <em>◆${b.orbs}</em>` : ''}</div>`).join('');
+  const pw = (b) => `${b.shield ? '<span class="pw sh" title="Shield">⬡</span>' : ''}${R.tick < b.magnetT ? '<span class="pw mg" title="Magnet">∪</span>' : ''}${R.tick < b.doubleT ? '<span class="pw db" title="Double orbs">×2</span>' : ''}`;
+  $('#hField').innerHTML = R.active.map((b) => `<div class="racer${b.i === game.me ? ' you' : ''}${b.alive ? '' : ' out'}" style="--c:${b.color}"><i></i>${esc(b.i === game.me ? 'You' : b.name)}${pw(b)}${b.orbs ? ` <em>◆${b.orbs}</em>` : ''}</div>`).join('');
   const me = R.spheres.find((b) => b.i === game.me), banner = $('#banner');
   const showTip = game.mode !== 'attract' && game.phase === 'play' && R.t < 4;
   banner.hidden = !(showTip || (me && !me.alive && game.phase === 'play'));
-  banner.textContent = me && !me.alive ? 'You are out. Spectating.' : isTouch ? 'Tap anywhere to switch lanes' : 'Space or click to switch lanes';
+  banner.textContent = me && !me.alive ? 'You are out. Spectating.' : PAD.used ? 'Any button switches lanes' : isTouch ? 'Tap anywhere to switch lanes' : 'Space or click to switch lanes';
 }
 
+// power-up state the world draws on a sphere
+const powersOf = (b, R) => ({ shield: b.shield, magnet: R.tick < b.magnetT, double: R.tick < b.doubleT, shieldPop: b.shieldUsedTick > 0 && R.tick - b.shieldUsedTick < 30 });
 // what the world draws this frame
 function viewOf(now) {
   const R = game.R;
   if (!R) return null;
-  let tNow;
-  if (game.phase === 'play' || game.phase === 'done') tNow = (now - game.t0) / 1000; else tNow = game.phase === 'countdown' ? Math.min(0, (now - game.t0) / 1000) : 0;
-  const frac = clamp((now - game.t0) / TICK_MS - R.tick, 0, 1);
+  const tNow = game.phase === 'intro' ? 0 : game.clock / 1000;
+  const frac = clamp(game.clock / TICK_MS - R.tick, 0, 1);
   const tDraw = game.phase === 'done' ? R.t : Math.min(tNow, R.t + DT);
   const sDraw = SIM0.sAtT(Math.max(0, tDraw)) + Math.min(0, tDraw) * 20;
   const alive = R.active.filter((b) => b.alive);
   let follow = game.me;
   const me = R.spheres.find((b) => b.i === game.me);
-  if (!me || (!me.alive && (now - game.t0) / 1000 - me.deathTick / 60 > 0.9)) follow = (R.winner && game.phase === 'done' ? R.winner : alive.sort((a, b) => b.orbs - a.orbs)[0] || R.active[0]).i;
+  if (!me || (!me.alive && game.clock / 1000 - me.deathTick / 60 > 0.9)) follow = (R.winner && game.phase === 'done' ? R.winner : alive.sort((a, b) => b.orbs - a.orbs)[0] || R.active[0]).i;
   return {
     t: tDraw, s: sDraw, phase: game.phase, follow,
-    spheres: R.active.map((b) => ({ i: b.i, x: sphereX(b, frac), alive: b.alive, deadS: SIM0.sAtTick(b.deathTick), winner: R.winner === b })),
+    spheres: R.active.map((b) => ({ i: b.i, x: sphereX(b, frac), alive: b.alive, deadS: SIM0.sAtTick(b.deathTick), winner: R.winner === b, ...powersOf(b, R) })),
   };
 }
 let last = performance.now();
@@ -258,7 +279,8 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
   try {
     pollPad();
-    if (game.mode === 'online') NET.frame(now); else if (game.R) stepLocal(now);
+    if (game.mode === 'online') NET.frame(now); else if (game.R) stepLocal(now, dt);
+    if (game.lab) LAB.frame();
     const v = game.mode === 'online' ? NET.view(now) : viewOf(now);
     WORLD.frame(dt, v || { t: 0, s: 0, spheres: [], phase: 'idle' });
     if (game.mode !== 'attract') renderHud(false);

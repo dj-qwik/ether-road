@@ -37,18 +37,36 @@ path (Safe admin, KMS keys, co-signers on separate infrastructure, an audit) is 
 | Control | One tap (Space, any arrow, click, touch, controller button) toggles lanes. A lane change animates over 100 ms; collision uses the new lane from its 50% point. Taps within 65 ms are ignored; a tap during a change is held 80 ms. |
 | Speed | The game's, never the player's: 20 u/s at the start, +0.25 u/s per second, 35 u/s at the cap. |
 | Course | Built from the race seed (two committed random draws): prism spikes, mines, walls, laser shutters, echo blockers, falling pillars, pulse gates and rotating teeth on the 144 BPM beat, crushers, plus decoys that look solid but aren't while you pass. Every racer gets the same road, mirrored for half of them, so every road is exactly as hard. A flawless driver must be able to finish every course or it is rebuilt. |
-| Pacing | Hazards one kind at a time for the first 15 s, then mixed; switch windows tighten from 0.65 s to 0.06 s. **Final collapse** at 48 s. |
+| Pacing | Prism spikes, mines, walls, laser shutters, echo blockers, falling pillars, sweepers, pulse gates, rotating teeth and crushers. Hazards one kind at a time for the first 15 s, then mixed; switch windows tighten from 0.65 s to 0.06 s. **Final collapse** at 48 s. |
+| Tracks | Six, dealt from a shuffled deck so all six come up before any repeats: **Nebula Run**, **Ion Helix**, **Solar Canyon**, **Prism Cathedral**, **Vector Storm**, **Signal Ghost**. Each has its own rail shapes, hazard mix and look; the difficulty schedule is the same on all of them. |
+| Equal rails | Every racer's rail has its own curves, but all rails are exactly as long as each other over every 96-unit stretch and over the whole race (rails that come out shorter get a gentle rolling hill and S-bend, solved to match). `tools/tracks.mjs` checks it: worst mismatch 0.3% per stretch, 0.01% over a race. Time is identical by construction: the race runs in track distance at the game's speed. |
+| Power-ups | Shield (the next hit passes through you), Magnet (orbs in both lanes for 4 s), Double (orbs count ×2 for 6 s). Each sits at the same track position for every racer, in the risky lane between two hazards, at fixed times (11, 24, 33, 42 s, first fitting gap). Effects are fixed, nothing is random. |
 | Result | Last sphere alive wins at once. Still two or more at 60 s, or everyone out on the same tick: most gold orbs, then fewest taps, then a draw fixed before the start. |
 
 `node game/tools/accept.mjs` checks all of that with scripted drivers at 150 / 220 / 300 / 400 ms reactions:
 
 ```
-PACING 4 × 220 ms: race length median 46 s · p90 58 s · first out median 29 s · reached the cap 3%
-SOLVABLE flawless driver crashed in 0/60 courses
-FAIR seat wins 32/30/32/26
+PACING 4 × 220 ms: race length median 52 s · p90 59 s · first out median 25 s
+SOLVABLE flawless driver crashed in 0/200 courses
+FAIR seat wins 101/97/97/105
 EXPLOIT idle / mashing / metronome taps / random taps: 0% wins each
-SKILL wins by reaction time 150 ms 56% · 220 ms 28% · 300 ms 13% · 400 ms 3%
+SKILL wins by reaction time 150 ms 67% · 220 ms 21% · 300 ms 9% · 400 ms 4%
+TRACK each of the six: median 46–56 s, first out 23–33 s, ~3 power-ups per race
 ```
+
+## Practice, test lab, controllers, skins
+
+- **Practice** races computer players (Easy / Normal / Sharp / Flawless) on a fresh road, entirely in the browser.
+- **Test lab** (yours): open the site once with `#lab` at the end of the address (e.g. `https://…onrender.com/#lab`);
+  a *Test lab* button then stays on that browser's home screen. Pick track, look, seed, start time (0–55 s),
+  speed (0.25–4×), racers, computer level, one hazard kind, invincible, autopilot. In a lab race: `R` restart same
+  road · `N` new road · `T` next track · `J` skip 5 s · `F` speed · `G` invincible · `P` autopilot · `Esc` lab.
+  It is local only and can't touch online or paid races.
+- **Controllers** (Xbox, PlayStation, Switch Pro, most others): any face button, bumper, trigger or d-pad press
+  switches lanes; in menus the d-pad/left stick moves, A (✕) picks, B (○) goes back, Start presses the main
+  button, Back/Select opens the test lab. Rumble on crashes, shield hits and power-ups where the browser supports it.
+- **Sphere skins**: 24 looks, all the same size and handling. Saved per browser and shown to everyone online;
+  your racer colour still marks your rail, halo and name tag.
 
 ## How it is built
 

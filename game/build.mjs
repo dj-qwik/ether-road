@@ -22,7 +22,7 @@ const detTransform = (js) => js.replaceAll('Math.random()', 'RNG()').replace(/\b
 
 const det = rd('sim', '00_det.js'), base = rd('sim', '01_base.js'), follow = rd('sim', '99_follow.js')
 const body = ['01_base.js', '10_race.js'].map((f) => `// ═════ sim/${f} ═════\n` + detTransform(rd('sim', f)))
-const EXPORTS = ['ARENAS', 'createRound', 'buildCourse', 'packInput', 'unpackInput', 'IDLE_INPUT', 'TAP', 'DT', 'RACE_SECONDS', 'RACE_TICKS', 'BEAT',
+const EXPORTS = ['ARENAS', 'TRACKS', 'POWERS', 'createRound', 'buildCourse', 'packInput', 'unpackInput', 'IDLE_INPUT', 'TAP', 'DT', 'RACE_SECONDS', 'RACE_TICKS', 'BEAT',
   'SPHERE_R', 'LANE_X', 'SWAP_TICKS', 'SWAP_MID', 'DEBOUNCE_TICKS', 'ORB_R', 'speedAt', 'sAtTick', 'sAtT', 'tOfS', 'tickAtS', 'hazardOn',
   'sphereTap', 'advanceSwap', 'KIND', 'COLLAPSE_AT', 'ROSTER']
 const createSimSrc = `// ═════════════════ createSim(env) — one isolated, deterministic simulation instance ═════════════════
