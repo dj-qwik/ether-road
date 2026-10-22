@@ -15,7 +15,7 @@ const THEMES = {
 const RAIL_HALF = 1.3, VIEW_AHEAD = 230, VIEW_BEHIND = 14;
 const smooth = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
 const WORLD = (() => {
-  let T = null, renderer = null, scene = null, camera = null, composer = null, bloom = null, ready = false;
+  let T = null, renderer = null, scene = null, camera = null, camOther = null, composer = null, bloom = null, ready = false;
   let race = null, starPts = null, decor = null, theme = THEMES.void, themeKey = 'void';
   const cam = { pos: null, look: null, fov: 66, roll: 0, shake: 0 };
   const W = { pixelRatio: 1, frameMs: 16, slowFrames: 0 };
@@ -51,7 +51,7 @@ const WORLD = (() => {
       orb: new T.MeshBasicMaterial({ color: new T.Color(0xffe08a).multiplyScalar(2), toneMapped: false }),
       marker: new T.MeshBasicMaterial({ color: hot.clone().multiplyScalar(1.6), transparent: true, opacity: 0.6, depthWrite: false, toneMapped: false, side: T.DoubleSide }),
       shard: new T.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }),
-      otherSolid: new T.MeshStandardMaterial({ color: 0x0a0508, emissive: hot, emissiveIntensity: 0.55, transparent: true, opacity: 0.5, roughness: 0.4 }),
+      otherSolid: new T.MeshStandardMaterial({ color: 0x0a0508, emissive: hot, emissiveIntensity: 0.5, transparent: true, opacity: 0.32, depthWrite: false, roughness: 0.4 }),
       otherGlow: new T.MeshBasicMaterial({ color: hot.clone().multiplyScalar(0.8), transparent: true, opacity: 0.5, toneMapped: false, depthWrite: false }),
       glowTex: glowTexture(),
     };
@@ -71,11 +71,18 @@ const WORLD = (() => {
     scene = new T.Scene();
     camera = new T.PerspectiveCamera(66, 1, 0.1, 900);
     cam.pos = new T.Vector3(0, 3, 8); cam.look = new T.Vector3(0, 0, -10);
-    scene.add(new T.HemisphereLight(0x8a80ff, 0x050308, 0.55));
-    const key = new T.DirectionalLight(0xffffff, 0.7); key.position.set(4, 10, 6); scene.add(key); scene.add(key.target);
+    const hemi = new T.HemisphereLight(0x8a80ff, 0x050308, 0.55); hemi.layers.enableAll(); scene.add(hemi);
+    const key = new T.DirectionalLight(0xffffff, 0.7); key.layers.enableAll(); key.position.set(4, 10, 6); scene.add(key); scene.add(key.target);
     W.key = key;
+    // Your own road can never be hidden. Pass 1 draws everything else with a near clip of 9 u (another racer's rail
+    // swinging past the lens simply isn't drawn); pass 2 clears depth and draws the followed racer's rail, hazards,
+    // pickups and sphere (layer 1) on top. So nothing from another track can ever cover the lane ahead of you.
+    camOther = new T.PerspectiveCamera(66, 1, 9, 900); camOther.layers.set(0); camera.layers.set(1);
     composer = new T.EffectComposer(renderer);
-    composer.addPass(new T.RenderPass(scene, camera));
+    composer.addPass(new T.RenderPass(scene, camOther));
+    const mine = new T.RenderPass(scene, camera); mine.clear = false; mine.clearDepth = true;
+    const draw = mine.render.bind(mine); mine.render = (...a) => { const bg = scene.background; scene.background = null; draw(...a); scene.background = bg; };
+    composer.addPass(mine);
     bloom = new T.UnrealBloomPass(new T.Vector2(512, 512), 0.26, 0.3, 0.7); // ~55% below the first build
     if (location.hash.includes('nobloom')) bloom.enabled = false;
     composer.addPass(bloom);
@@ -90,7 +97,7 @@ const WORLD = (() => {
     const w = innerWidth, h = innerHeight;
     renderer.setSize(w, h, false); composer.setSize(w, h); composer.setPixelRatio(W.pixelRatio);
     bloom.resolution.set(Math.max(256, w / 2), Math.max(256, h / 2));
-    camera.aspect = w / h; camera.updateProjectionMatrix();
+    camera.aspect = w / h; camera.updateProjectionMatrix(); if (camOther) { camOther.aspect = w / h; camOther.updateProjectionMatrix(); }
   }
   function setTheme(key) {
     themeKey = THEMES[key] ? key : 'void'; theme = THEMES[themeKey];
@@ -124,26 +131,26 @@ const WORLD = (() => {
     const course = R.course, n = R.active.length;
     const sMax = course.end + 60;
     const geo = RAILGEO.build(course, n, SIM0.sAtT, trackKey);
-    const rails = R.active.map((b, j) => ({ b, j, ...geo[j], color: new T.Color(b.color) }));
+    const rails = R.active.map((b, j) => { const grp = new T.Group(); root.add(grp); return { b, j, ...geo[j], color: new T.Color(b.color), grp, layer: 0 }; });
     // ribbons + edges
-    for (const rl of rails) root.add(ribbon(rl, 0, RAIL_HALF, 0, M.road, true));
+    for (const rl of rails) rl.grp.add(ribbon(rl, 0, RAIL_HALF, 0, M.road, true));
     for (const rl of rails) {
       const mineRail = rl.b.i === me, edge = new T.MeshBasicMaterial({ color: rl.color.clone().multiplyScalar(mineRail || me < 0 ? 0.85 : 0.55), toneMapped: false });
       const under = new T.MeshBasicMaterial({ color: rl.color.clone().multiplyScalar(0.35), transparent: true, opacity: 0.35, toneMapped: false, depthWrite: false, side: T.DoubleSide });
       for (const sgn of [-1, 1]) {
-        root.add(ribbon(rl, sgn * (RAIL_HALF + 0.03), 0.06, 0.07, edge));
-        root.add(ribbon(rl, sgn * (RAIL_HALF + 0.12), 0.05, -0.45, under, false, true));
+        rl.grp.add(ribbon(rl, sgn * (RAIL_HALF + 0.03), 0.06, 0.07, edge));
+        rl.grp.add(ribbon(rl, sgn * (RAIL_HALF + 0.12), 0.05, -0.45, under, false, true));
       }
     }
     // hazards + orbs
     const items = [];
     for (const rl of rails) {
-      for (const h of course.blocks) items.push(makeHazard(h, rl, root));
-      for (const o of course.orbs) items.push(makeOrb(o, rl, root));
+      for (const h of course.blocks) items.push(makeHazard(h, rl, rl.grp));
+      for (const o of course.orbs) items.push(makeOrb(o, rl, rl.grp));
     }
     items.sort((a, c) => a.s0 - c.s0);
     // spheres
-    const spheres = rails.map((rl) => makeSphere(rl, root, rl.b.i === me));
+    const spheres = rails.map((rl) => makeSphere(rl, rl.grp, rl.b.i === me));
     // decor along the spine
     const dec = makeDecor(root, sMax);
     race = { R, me, rails, items, lo: 0, spheres, root, dec, shards: [], waves: [], finale: false };
@@ -191,6 +198,7 @@ const WORLD = (() => {
     return obj;
   }
   const laneX = (lane) => (lane ? LANE_X : -LANE_X);
+  function setLayer(rl, layer) { rl.layer = layer; rl.grp.traverse((o) => { if (o.isLight) o.layers.enableAll(); else o.layers.set(layer); }); }
   function makeHazard(h, rl, root) {
     const lane = h.lane ^ rl.b.mirror, x = laneX(lane), len = h.s1 - h.s0, mid = (h.s0 + h.s1) / 2;
     const g = new T.Group(); orient(g, rl, mid, x, 0); g.visible = false; root.add(g);
@@ -263,8 +271,8 @@ const WORLD = (() => {
     for (let k = 0; k < TN - 1; k++) { const a = k * 2; ti.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
     const tg = new T.BufferGeometry(); tg.setAttribute('position', new T.BufferAttribute(tv, 3)); tg.setAttribute('color', new T.BufferAttribute(tc, 3)); tg.setIndex(ti);
     const trail = new T.Mesh(tg, new T.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide, toneMapped: false }));
-    trail.frustumCulled = false; root.add(trail);
-    const tag = isMe ? null : nameTag(`${rl.b.glyph} ${rl.b.name}`, rl.b.color); if (tag) root.add(tag);
+    trail.frustumCulled = false; rl.grp.add(trail);
+    const tag = isMe ? null : nameTag(`${rl.b.glyph} ${rl.b.name}`, rl.b.color); if (tag) rl.grp.add(tag);
     return { rl, g, spin, extra: skin.extra, halo, light, trail, tag, hist: [], dead: false, roll: 0, x: laneX(rl.b.cl), isMe, shieldM, magnetM, dblM };
   }
   function makeDecor(root, sMax) {
@@ -304,6 +312,8 @@ const WORLD = (() => {
       const it = items[k];
       if (it.s0 > s + VIEW_AHEAD) break;
       if (it.s1 < s - VIEW_BEHIND) { it.g.visible = false; continue; }
+      // on the followed rail, anything already behind the sphere would sit between it and the camera: gone
+      if (it.rl === race.top && (it.h ? it.h.s1 : it.orb.s) < s - 0.4) { it.g.visible = false; continue; }
       it.g.visible = true;
       if (it.kind === 'orb') { const got = it.rl.b.got.includes(it.orb.id); it.g.visible = !got; it.m.rotation.y = t * 3; it.m.rotation.x = t * 1.3; continue; }
       const h = it.h, P = it.parts, on = SIM0.hazardOn(h, t);
@@ -344,7 +354,7 @@ const WORLD = (() => {
     if (!ready) return;
     const now = performance.now() / 1000;
     if (starPts) starPts.position.copy(camera.position);
-    if (!race) { camera.position.set(Math.sin(now * 0.1) * 6, 3, 10); camera.lookAt(0, 0, -30); render(dt); return; }
+    if (!race) { camera.position.set(Math.sin(now * 0.1) * 6, 3, 10); camera.lookAt(0, 0, -30); camOther.position.copy(camera.position); camOther.quaternion.copy(camera.quaternion); render(dt); return; }
     const { t, s } = view;
     updateHazards(t, s);
     // spheres
@@ -355,7 +365,7 @@ const WORLD = (() => {
       const ss = v.alive ? s : v.deadS;
       const f = railAt(sp.rl, ss, v.x, SPHERE_R + 0.03 + 0.04 * Math.sin(now * 9.4 + sp.rl.j));
       if (!v.alive) {
-        if (!sp.dead) { sp.dead = true; burst(f, sp.rl.color, sp.isMe); }
+        if (!sp.dead) { sp.dead = true; burst(f, sp.rl.color, sp.isMe, 1, sp.rl); }
         sp.g.visible = false; sp.light.intensity = 0; if (sp.tag) sp.tag.visible = false;
       } else { sp.dead = false; sp.g.visible = true; }
       sp.g.position.set(f.x, f.y, f.z);
@@ -364,7 +374,7 @@ const WORLD = (() => {
       // orient the sphere's group along its rail so rolling looks right
       sp.g.quaternion.setFromRotationMatrix(_m().makeBasis(new T.Vector3(f.sx, f.sy, f.sz), new T.Vector3(f.ux, f.uy, f.uz), new T.Vector3(-f.tx, -f.ty, -f.tz).normalize()));
       sp.shieldM.visible = !!v.shield && v.alive; if (sp.shieldM.visible) { sp.shieldM.rotation.y = now * 1.5; sp.shieldM.rotation.x = now * 0.7; }
-      if (v.shieldPop && !sp.popped) { sp.popped = true; const pf = railAt(sp.rl, ss, v.x, SPHERE_R); burst(pf, new T.Color(0x6fb7ff), false, 0.5); }
+      if (v.shieldPop && !sp.popped) { sp.popped = true; const pf = railAt(sp.rl, ss, v.x, SPHERE_R); burst(pf, new T.Color(0x6fb7ff), false, 0.5, sp.rl); }
       if (!v.shieldPop) sp.popped = false;
       sp.magnetM.visible = !!v.magnet && v.alive; if (sp.magnetM.visible) sp.magnetM.scale.setScalar(1 + 0.08 * Math.sin(now * 12));
       sp.dblM.visible = !!v.double && v.alive; if (sp.dblM.visible) { sp.dblM.position.set(Math.cos(now * 5) * 0.6, 0.45, Math.sin(now * 5) * 0.6); sp.dblM.rotation.y = now * 6; }
@@ -375,6 +385,9 @@ const WORLD = (() => {
       if (sp.tag && v.alive) { sp.tag.visible = true; sp.tag.position.set(f.x + f.ux * 1.05, f.y + f.uy * 1.05, f.z + f.uz * 1.05); }
     }
     updateBursts(dt);
+    // the followed racer's rail is drawn on top (see init)
+    const top = followSp ? followSp.rl : race.rails[0];
+    if (race.top !== top) { for (const rl of race.rails) setLayer(rl, rl === top ? 1 : 0); race.top = top; }
     // camera: behind and a little above the followed sphere, framing at least 1.25 s of road ahead
     const rl = followSp ? followSp.rl : race.rails[0], fv = view.spheres.find((x) => x.i === (followSp ? followSp.rl.b.i : -1));
     const lx = fv ? fv.x : 0, sNow = fv && !fv.alive ? fv.deadS : s;
@@ -399,6 +412,7 @@ const WORLD = (() => {
     camera.position.set(cam.pos.x + (Math.random() - 0.5) * cam.shake * 0.3, cam.pos.y + (Math.random() - 0.5) * cam.shake * 0.3, cam.pos.z);
     camera.up.set(e.ux * 0.3, 0.7 + e.uy * 0.3, e.uz * 0.3);
     camera.lookAt(cam.look.x, cam.look.y, cam.look.z);
+    camOther.position.copy(camera.position); camOther.quaternion.copy(camera.quaternion); camOther.fov = camera.fov; camOther.aspect = camera.aspect; camOther.updateProjectionMatrix();
     W.key.position.set(cam.pos.x + 4, cam.pos.y + 10, cam.pos.z + 6); W.key.target.position.set(cam.look.x, cam.look.y, cam.look.z);
     // finale: the merge arena glows harder; chromatic theme drifts hue
     if (theme.shift) { const c = new T.Color().setHSL((now * 0.02) % 1, 0.7, 0.045, T.SRGBColorSpace); scene.fog.color.copy(c); scene.background.copy(c); }
@@ -417,22 +431,23 @@ const WORLD = (() => {
     pa.needsUpdate = true; ca.needsUpdate = true;
   }
   // elimination: shell fractures into bright shards and a colour-coded shock ring
-  function burst(f, color, big, scale = 1) {
+  function burst(f, color, big, scale = 1, rl = null) {
+    const into = rl ? rl.grp : race.root, layer = rl ? rl.layer : 0;
     const mat = new T.MeshBasicMaterial({ color: color.clone().multiplyScalar(2.6), toneMapped: false, transparent: true });
     for (let k = 0; k < Math.round((big ? 34 : 22) * scale); k++) {
       const m = new T.Mesh(G.tetra, mat); m.position.set(f.x, f.y, f.z);
       const a = Math.random() * 6.283, u = Math.random() * 1.6 - 0.2, sp = 4 + Math.random() * 9;
       m.userData.v = new T.Vector3(Math.cos(a) * sp * 0.6 + f.tx * 3, u * sp, Math.sin(a) * sp * 0.6 + f.tz * 3); m.userData.spin = new T.Vector3(Math.random() * 9, Math.random() * 9, 0);
-      race.root.add(m); race.shards.push({ m, life: 1.1 + Math.random() * 0.5 });
+      m.layers.set(layer); into.add(m); race.shards.push({ m, life: 1.1 + Math.random() * 0.5, into });
     }
     const ring = new T.Mesh(G.wave, new T.MeshBasicMaterial({ color: color.clone().multiplyScalar(2), transparent: true, opacity: 0.9, side: T.DoubleSide, depthWrite: false, toneMapped: false }));
-    ring.position.set(f.x, f.y, f.z); ring.lookAt(f.x + f.ux, f.y + f.uy, f.z + f.uz); race.root.add(ring); race.waves.push({ m: ring, life: 0.8 });
+    ring.position.set(f.x, f.y, f.z); ring.lookAt(f.x + f.ux, f.y + f.uy, f.z + f.uz); ring.layers.set(layer); into.add(ring); race.waves.push({ m: ring, life: 0.8, into });
     if (big) cam.shake = 1.4;
   }
   function updateBursts(dt) {
-    for (const p of race.shards) { p.life -= dt; p.m.userData.v.y -= 9 * dt; p.m.position.addScaledVector(p.m.userData.v, dt); p.m.rotation.x += p.m.userData.spin.x * dt; p.m.rotation.y += p.m.userData.spin.y * dt; p.m.scale.setScalar(Math.max(0.01, p.life)); if (p.life <= 0) race.root.remove(p.m); }
+    for (const p of race.shards) { p.life -= dt; p.m.userData.v.y -= 9 * dt; p.m.position.addScaledVector(p.m.userData.v, dt); p.m.rotation.x += p.m.userData.spin.x * dt; p.m.rotation.y += p.m.userData.spin.y * dt; p.m.scale.setScalar(Math.max(0.01, p.life)); if (p.life <= 0) p.into.remove(p.m); }
     race.shards = race.shards.filter((p) => p.life > 0);
-    for (const w of race.waves) { w.life -= dt; w.m.scale.setScalar(1 + (0.8 - w.life) * 9); w.m.material.opacity = Math.max(0, w.life); if (w.life <= 0) race.root.remove(w.m); }
+    for (const w of race.waves) { w.life -= dt; w.m.scale.setScalar(1 + (0.8 - w.life) * 9); w.m.material.opacity = Math.max(0, w.life); if (w.life <= 0) w.into.remove(w.m); }
     race.waves = race.waves.filter((w) => w.life > 0);
   }
   function render(dt) {
