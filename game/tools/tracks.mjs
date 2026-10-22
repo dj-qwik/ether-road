@@ -8,7 +8,7 @@ for (const key of Object.keys(C.SIM0.TRACKS)) {
   for (let r = 0; r < PER; r++) {
     const n = 2 + (r % 3), seed = (Math.random() * 4294967296) >>> 0
     const R = C.createSim({ seed }).createRound({ key, seed, players: Array.from({ length: n }, (_, i) => ({ i })), active: Array.from({ length: n }, (_, i) => i) })
-    const rails = C.RAILGEO.build(R.course, n, C.SIM0.sAtT, key)
+    const rails = C.RAILGEO.build(R.course, n, R.course.tl.sAtT, key)
     const chunks = rails[0].len.length, CH = C.RAILGEO.CH / C.RAILGEO.STEP
     // arc length of the drawn (resampled) rail per chunk, compared across rails
     const drawn = rails.map((rl) => { const L = new Float64Array(chunks); for (let c = 0; c < chunks; c++) for (let i = c * CH; i < (c + 1) * CH; i++) L[c] += Math.hypot(rl.pos[i * 3 + 3] - rl.pos[i * 3], rl.pos[i * 3 + 4] - rl.pos[i * 3 + 1], rl.pos[i * 3 + 5] - rl.pos[i * 3 + 2]); return L })

@@ -199,6 +199,8 @@ const SFX = {
   pass() { if (!actx) return; noiseHit(actx.currentTime, 0.4, 0.05, 600, 1.2, 'bandpass', sfxBus, 3200); },
   power() { if (!actx) return; const t = actx.currentTime; [76, 83, 88, 95].forEach((m, k) => osc('triangle', midiHz(m), t + k * 0.05, 0.18, 0.06, sfxBus, 0.002)); },
   shieldPop() { if (!actx) return; const t = actx.currentTime; noiseHit(t, 0.3, 0.2, 4000, 0.8, 'highpass', sfxBus); osc('sine', 1400, t, 0.3, 0.08, sfxBus, 0.002, 300); },
+  boost() { if (!actx) return; const t = actx.currentTime; noiseHit(t, 0.8, 0.12, 300, 1.5, 'bandpass', sfxBus, 6000); osc('sawtooth', 120, t, 0.7, 0.05, sfxBus, 0.02, 480); },
+  slow() { if (!actx) return; const t = actx.currentTime; noiseHit(t, 0.8, 0.1, 4000, 1.5, 'bandpass', sfxBus, 300); osc('sine', 500, t, 0.7, 0.06, sfxBus, 0.02, 140); },
   count(n) { if (!actx) return; osc('triangle', n > 0 ? 660 : 1320, actx.currentTime, n > 0 ? 0.14 : 0.4, 0.09, sfxBus); },
   win() { if (!actx) return; const t = actx.currentTime; [69, 73, 76, 81, 85].forEach((m, k) => osc('triangle', midiHz(m), t + k * 0.08, 0.3, 0.07, sfxBus)); },
   lose() { if (!actx) return; const t = actx.currentTime; [64, 60, 57].forEach((m, k) => osc('triangle', midiHz(m), t + k * 0.12, 0.25, 0.06, sfxBus)); },

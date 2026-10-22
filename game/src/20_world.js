@@ -12,7 +12,7 @@ const THEMES = {
   signal: { bg: 0x030a08, fog: 0x08201a, density: 0.012, hazard: 0xff4f6d, accent: 0x9fffe0, accent2: 0x5cffc8, decor: 'shards' },
   ion: { bg: 0x04040c, fog: 0x0a0a1e, density: 0.0105, hazard: 0xff2e5b, accent: 0x6fd8ff, accent2: 0xffe08a, decor: 'ionrings' },
 };
-const RAIL_HALF = 1.3, VIEW_AHEAD = 230, VIEW_BEHIND = 14;
+const RAIL_HALF = 1.3, VIEW_AHEAD = 230, VIEW_BEHIND = 14, STRIP_LEN = 6;
 const smooth = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
 const WORLD = (() => {
   let T = null, renderer = null, scene = null, camera = null, camOther = null, composer = null, bloom = null, ready = false;
@@ -130,7 +130,7 @@ const WORLD = (() => {
     const root = new T.Group(); scene.add(root); race0.me = me;
     const course = R.course, n = R.active.length;
     const sMax = course.end + 60;
-    const geo = RAILGEO.build(course, n, SIM0.sAtT, trackKey);
+    const geo = RAILGEO.build(course, n, course.tl.sAtT, trackKey);
     const rails = R.active.map((b, j) => { const grp = new T.Group(); root.add(grp); return { b, j, ...geo[j], color: new T.Color(b.color), grp, layer: 0 }; });
     // ribbons + edges
     for (const rl of rails) rl.grp.add(ribbon(rl, 0, RAIL_HALF, 0, M.road, true));
@@ -147,6 +147,7 @@ const WORLD = (() => {
     for (const rl of rails) {
       for (const h of course.blocks) items.push(makeHazard(h, rl, rl.grp));
       for (const o of course.orbs) items.push(makeOrb(o, rl, rl.grp));
+      for (const st of course.strips) items.push(makeStrip(st, rl, rl.grp));
     }
     items.sort((a, c) => a.s0 - c.s0);
     // spheres
@@ -229,6 +230,37 @@ const WORLD = (() => {
     const sg = new T.BufferGeometry(); sg.setAttribute('position', new T.BufferAttribute(v, 3)); sg.setIndex(idx);
     const strip = new T.Mesh(sg, M.hotGlow); strip.frustumCulled = false; g.add(strip);
     return { h, rl, g, s0: h.s0 - 4, s1: h.s1 + 2, kind: h.kind, parts: {} };
+  }
+  // Speed strips: a pad across the whole road. Boost = cyan forward chevrons, slow = amber bars.
+  const stripTex = {};
+  function stripTexture(kind) {
+    if (stripTex[kind]) return stripTex[kind];
+    const c = document.createElement('canvas'); c.width = 128; c.height = 128; const g = c.getContext('2d');
+    g.fillStyle = kind === 'boost' ? 'rgba(10,40,60,.6)' : 'rgba(60,30,5,.6)'; g.fillRect(0, 0, 128, 128);
+    if (kind === 'boost') { g.strokeStyle = '#7ff3ff'; g.lineWidth = 12; g.lineJoin = 'round'; for (const y of [28, 76]) { g.beginPath(); g.moveTo(14, y + 34); g.lineTo(64, y); g.lineTo(114, y + 34); g.stroke(); } }
+    else { g.fillStyle = '#ffb347'; for (const y of [18, 58, 98]) g.fillRect(10, y, 108, 14); }
+    const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace; t.wrapS = t.wrapT = T.RepeatWrapping;
+    return (stripTex[kind] = t);
+  }
+  function makeStrip(st, rl, root) {
+    const L = st.s1 - st.s0, x = laneX(st.lane ^ rl.b.mirror), N = 13, v = new Float32Array(N * 6), uv = new Float32Array(N * 4), idx = [];
+    for (let i = 0; i < N; i++) {
+      const sr = st.s0 + (L * i) / (N - 1);
+      for (let e = 0; e < 2; e++) { const p = railAt(rl, sr, x + (e ? 0.72 : -0.72), 0.02); v.set([p.x, p.y, p.z], (i * 2 + e) * 3); uv.set([e, -(L * i) / (N - 1) / 1.4], (i * 2 + e) * 2); }
+      if (i < N - 1) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+    }
+    const geo = new T.BufferGeometry(); geo.setAttribute('position', new T.BufferAttribute(v, 3)); geo.setAttribute('uv', new T.BufferAttribute(uv, 2)); geo.setIndex(idx);
+    const m = new T.Mesh(geo, new T.MeshBasicMaterial({ map: stripTexture(st.kind), color: new T.Color(st.kind === 'boost' ? 0xbff8ff : 0xffd9a0).multiplyScalar(1.2), transparent: true, depthWrite: false, toneMapped: false }));
+    m.frustumCulled = false;
+    const g = new T.Group(); g.add(m); g.visible = false; root.add(g);
+    // a glowing arch over the strip's lane so you can spot it from far away (cyan boost, amber slow)
+    const col = new T.Color(st.kind === 'boost' ? 0x22e6ff : 0xffb347).multiplyScalar(1.3), am = new T.MeshBasicMaterial({ color: col, toneMapped: false });
+    const arch = new T.Group(); orient(arch, rl, st.s0, x, 0);
+    for (const dx of [-0.74, 0.74]) { const post = new T.Mesh(G.box, am); post.scale.set(0.08, 1.15, 0.08); post.position.set(dx, 0.58, 0); arch.add(post); }
+    const top = new T.Mesh(G.box, am); top.scale.set(1.56, 0.1, 0.1); top.position.set(0, 1.18, 0); arch.add(top);
+    for (const k of [-1, 1]) { const chev = new T.Mesh(G.cone, am); chev.scale.set(0.6, 0.45, 0.6); chev.position.set(k * 0.32, 0.86, 0); chev.rotation.x = st.kind === 'boost' ? -Math.PI / 2 : Math.PI / 2; arch.add(chev); }
+    g.add(arch);
+    return { strip: st, rl, g, m, s0: st.s0 - 4, s1: st.s1 + 2, kind: 'strip' };
   }
   const POWER_LOOK = { shield: 0x6fb7ff, magnet: 0xb48cff, double: 0xfff1a8 };
   function makeOrb(o, rl, root) {
@@ -315,8 +347,9 @@ const WORLD = (() => {
       const it = items[k];
       if (it.s0 > s + VIEW_AHEAD) break;
       // anything already behind the sphere would sit between it and the camera: gone
-      if (it.rl !== race.top || (it.h ? it.h.s1 : it.orb.s) < s - 0.4) { it.g.visible = false; continue; }
+      if (it.rl !== race.top || (it.h ? it.h.s1 : it.orb ? it.orb.s : it.strip.s1) < s - 0.4) { it.g.visible = false; continue; }
       it.g.visible = true;
+      if (it.kind === 'strip') { it.g.visible = !it.rl.b.strips.includes(it.strip.id); it.m.material.map.offset.y = -t * (it.strip.kind === 'boost' ? 2.5 : 0.6); continue; }
       if (it.kind === 'orb') { const got = it.rl.b.got.includes(it.orb.id); it.g.visible = !got; it.m.rotation.y = t * 3; it.m.rotation.x = t * 1.3; }
     }
   }
@@ -335,14 +368,14 @@ const WORLD = (() => {
     for (const sp of race.spheres) {
       const v = view.spheres.find((x) => x.i === sp.rl.b.i); if (!v) continue;
       if (v.i === view.follow) followSp = sp;
-      const ss = v.alive ? s : v.deadS;
+      const ss = v.s;
       const f = railAt(sp.rl, ss, v.x, SPHERE_R + 0.03 + 0.04 * Math.sin(now * 9.4 + sp.rl.j));
       if (!v.alive) {
         if (!sp.dead) { sp.dead = true; burst(f, sp.rl.color, sp.isMe, 1, sp.rl); }
         sp.g.visible = false; sp.light.intensity = 0; if (sp.tag) sp.tag.visible = false;
       } else { sp.dead = false; sp.g.visible = true; }
       sp.g.position.set(f.x, f.y, f.z);
-      sp.roll += (speedAt(Math.max(0, t)) * dt) / SPHERE_R; sp.spin.rotation.x = -sp.roll;
+      sp.roll += ((v.v || 0) * dt) / SPHERE_R; sp.spin.rotation.x = -sp.roll;
       for (const o of sp.extra.children) if (o.userData.orbit) o.rotation.z = now * o.userData.orbit;
       // orient the sphere's group along its rail so rolling looks right
       sp.g.quaternion.setFromRotationMatrix(_m().makeBasis(new T.Vector3(f.sx, f.sy, f.sz), new T.Vector3(f.ux, f.uy, f.uz), new T.Vector3(-f.tx, -f.ty, -f.tz).normalize()));
@@ -364,7 +397,7 @@ const WORLD = (() => {
     if (race.top !== top) { for (const rl of race.rails) setLayer(rl, rl === top ? 1 : 0); race.top = top; }
     // camera: behind and a little above the followed sphere, framing at least 1.25 s of road ahead
     const rl = followSp ? followSp.rl : race.rails[0], fv = view.spheres.find((x) => x.i === (followSp ? followSp.rl.b.i : -1));
-    const lx = fv ? fv.x : 0, sNow = fv && !fv.alive ? fv.deadS : s;
+    const lx = fv ? fv.x : 0, sNow = fv ? fv.s : s;
     const k = 1 - Math.exp(-dt * 10);
     cam.lx = cam.lx === undefined ? lx : lerp(cam.lx, lx, k);
     cam.dist = lerp(cam.dist ?? 5, view.phase === 'done' ? 7.5 : 5.0, 1 - Math.exp(-dt * 2));
@@ -379,7 +412,7 @@ const WORLD = (() => {
     if (b >= 1) cam.from = null;
     // widen briefly when another racer is close (crossings, parallel runs)
     let near = 0; for (const sp of race.spheres) if (sp !== followSp && sp.g.visible) { const d = sp.g.position.distanceTo(cam.pos); if (d < 9) near = Math.max(near, 1 - d / 9); }
-    const fovT = 64 + clamp((speedAt(Math.max(0, t)) - 20) / 15, 0, 1) * 8 + near * 4 + (view.phase === 'done' ? -4 : 0) + (camera.aspect < 1 ? (1 - camera.aspect) * 34 : 0); // portrait: keep both lanes in frame
+    const fovT = 64 + clamp(((fv && fv.v) || 20) - 20, 0, 24) / 15 * 8 + near * 4 + (view.phase === 'done' ? -4 : 0) + (camera.aspect < 1 ? (1 - camera.aspect) * 34 : 0); // portrait: keep both lanes in frame
     cam.fov = lerp(cam.fov, fovT, 1 - Math.exp(-dt * 3));
     camera.fov = cam.fov; camera.updateProjectionMatrix();
     cam.shake = Math.max(0, cam.shake - dt * 3);

@@ -33,7 +33,7 @@ if (atCap > 0.35) fails.push(`PACING ${pct(atCap)} of races reach the 60 s cap`)
 // SOLVABLE: a flawless driver (σ = 0, instant reactions, no misreads) never crashes
 {
   let crashes = 0
-  const flawless = { react: 0, sigma: 0, fool: 0, lapse: 0, greed: 0, aim: 0 }
+  const flawless = { react: 0, sigma: 0, fool: 0, lapse: 0, greed: 0, aim: 0, strips: 0 }
   for (let k = 0; k < N; k++) { const R = runRace(G, [{ ai: flawless }]); if (!R.spheres[0].alive) crashes++ }
   console.log(`SOLVABLE flawless driver crashed in ${crashes}/${N} courses`)
   if (crashes) fails.push(`SOLVABLE ${crashes} unsolvable courses`)
@@ -75,6 +75,21 @@ for (const [name, ctl] of Object.entries(LAZY)) {
   }
   console.log(`SKILL wins by reaction time ${ms.map((m, j) => `${m} ms ${pct(wins[j] / (N * 2))} (lives ${(surv[j] / (N * 2)).toFixed(0)} s)`).join(' · ')}`)
   for (let j = 1; j < 4; j++) if (wins[j] > wins[j - 1] * 1.1 + 4) fails.push(`SKILL ${ms[j]} ms wins more than ${ms[j - 1]} ms`)
+}
+
+// STRIPS: two boosts and two slows per course, one lane each, never under spikes, at the same spot for everyone
+{
+  let bad = 0, took = 0, races = 0
+  for (let k = 0; k < N; k++) {
+    const R = runRace(G, Array.from({ length: 4 }, () => ({ ai: reactionProfile(220) }))); races++
+    const st = R.course.strips, H = R.course.blocks
+    const boosts = st.filter((x) => x.kind === 'boost').length, slows = st.filter((x) => x.kind === 'slow').length
+    const covered = st.some((x) => H.some((h) => h.lane === x.lane && h.s0 - 0.8 < x.s1 && h.s1 + 0.8 > x.s0))
+    if (boosts !== 2 || slows !== 2 || covered) bad++
+    took += R.active.reduce((a, b) => a + b.strips.length, 0)
+  }
+  console.log(`STRIPS ${N - bad}/${N} courses: 2 boost + 2 slow, each in a clear gap · racers took ${(took / races / 4).toFixed(1)} strips per race on average`)
+  if (bad) fails.push(`STRIPS ${bad} courses with missing or covered strips`)
 }
 
 // TRACKS: every track paces within the same envelope; power-ups show up and get used

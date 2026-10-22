@@ -3,13 +3,33 @@
 // draws, every sphere's lane comes only from its taps, and collisions are tested in track coordinates
 // (distance along the road × lane), never against meshes. The 3D world is drawn from this data.
 
-// Distance travelled at the end of every tick (identical for every sphere: speed is the game's).
+// ───── speed strips ─────
+// Two boost strips and two slow strips per course, each covering ONE lane, at the same track position on every
+// racer's road (mirrored lane, like everything else). They sit in a gap between spikes in the lane you are NOT
+// riding at that moment, so you only hit one if you choose to: two quick taps in, two out. Never under spikes.
+//   boost — ×1.4 speed for 2.2 s: you gain distance, but the spikes come at you faster
+//   slow  — ×0.65 speed for 2.2 s: more time to react, but you lose distance
+// Distance travelled is the first tie-break if more than one racer is still alive at the 60 s cap.
+const STRIP = { boost: { mul: 1.4 }, slow: { mul: 0.65 }, hold: 2.2, rampIn: 0.25, rampOut: 0.4, len: 4 };
+function fxMul(kind, d) { // d = seconds since the strip was hit
+  if (!kind || d < 0 || d > STRIP.rampIn + STRIP.hold + STRIP.rampOut) return 1;
+  const k = d < STRIP.rampIn ? d / STRIP.rampIn : d < STRIP.rampIn + STRIP.hold ? 1 : 1 - (d - STRIP.rampIn - STRIP.hold) / STRIP.rampOut;
+  return 1 + (STRIP[kind].mul - 1) * k;
+}
+function stripMul() { return 1; }
 const S_TICKS = RACE_TICKS + 1800;
-const S_TABLE = (() => { const a = new Float64Array(S_TICKS + 1); for (let k = 1; k <= S_TICKS; k++) a[k] = a[k - 1] + speedAt((k - 1) * DT) * DT; return a; })();
-const sAtTick = (k) => S_TABLE[Math.max(0, Math.min(S_TICKS, k))];
-function sAtT(t) { const x = t / DT, k = Math.floor(x); return k >= S_TICKS ? S_TABLE[S_TICKS] : k < 0 ? 0 : S_TABLE[k] + (S_TABLE[k + 1] - S_TABLE[k]) * (x - k); }
-function tickAtS(x) { let lo = 0, hi = S_TICKS; while (lo < hi) { const m = (lo + hi) >> 1; if (S_TABLE[m] >= x) hi = m; else lo = m + 1; } return lo; } // first tick with s ≥ x
-function tOfS(x) { const k = tickAtS(x); if (k <= 0) return 0; const a = S_TABLE[k - 1], b = S_TABLE[k]; return (k - 1 + (b > a ? (x - a) / (b - a) : 0)) * DT; }
+function makeTimeline(strips = []) {
+  const S = new Float64Array(S_TICKS + 1);
+  for (let k = 1; k <= S_TICKS; k++) { const t = (k - 1) * DT; S[k] = S[k - 1] + speedAt(t) * DT; }
+  const sAtTick = (k) => S[Math.max(0, Math.min(S_TICKS, k))];
+  const sAtT = (t) => { const x = t / DT, k = Math.floor(x); return k >= S_TICKS ? S[S_TICKS] : k < 0 ? 0 : S[k] + (S[k + 1] - S[k]) * (x - k); };
+  const tickAtS = (x) => { let lo = 0, hi = S_TICKS; while (lo < hi) { const m = (lo + hi) >> 1; if (S[m] >= x) hi = m; else lo = m + 1; } return lo; }; // first tick with s ≥ x
+  const tOfS = (x) => { const k = tickAtS(x); if (k <= 0) return 0; const a = S[k - 1], b = S[k]; return (k - 1 + (b > a ? (x - a) / (b - a) : 0)) * DT; };
+  const speedAtT = (t) => speedAt(t);
+  return { strips, sAtTick, sAtT, tickAtS, tOfS, speedAtT };
+}
+const TL0 = makeTimeline([]); // the base speed ramp, the same for every course
+const sAtTick = TL0.sAtTick, sAtT = TL0.sAtT, tickAtS = TL0.tickAtS, tOfS = TL0.tOfS;
 
 // Is a hazard solid at time t? Periodic ones (gates, crushers) move on the music's beat; the rest switch on/off once.
 function hazardOn(h, t) {
@@ -17,8 +37,8 @@ function hazardOn(h, t) {
   return t >= h.on && t < h.off;
 }
 // Solid at any moment while a sphere passes it (the sphere covers [s0 − r, s1 + r]), with a little margin.
-function hazardLive(h, m) {
-  const a = tOfS(h.s0 - SPHERE_R) - m, b = tOfS(h.s1 + SPHERE_R) + m;
+function hazardLive(h, m, tl = TL0) {
+  const a = tl.tOfS(h.s0 - SPHERE_R) - m, b = tl.tOfS(h.s1 + SPHERE_R) + m;
   for (let k = 0; k <= 8; k++) if (hazardOn(h, a + (b - a) * k / 8)) return true;
   return false;
 }
@@ -39,7 +59,7 @@ const KIND = { spike: { len: 1.0 } };
 //   magnet  — for 4 s, orbs in BOTH lanes are yours
 //   double  — for 6 s, orbs count twice
 const POWERS = { shield: { ticks: 0 }, magnet: { ticks: 240 }, double: { ticks: 360 } };
-const POWER_PLAN = [[11, 'magnet'], [24, 'shield'], [33, 'double'], [42, 'magnet']];
+const POWER_PLAN = [[11, 'magnet'], [14, 'boost'], [19, 'slow'], [24, 'shield'], [29, 'boost'], [33, 'double'], [37, 'slow'], [42, 'magnet']];
 
 /**
  * Build a course from a seed string. Pure function of the seed: the server and every browser build the same one.
@@ -49,18 +69,21 @@ const POWER_PLAN = [[11, 'magnet'], [24, 'shield'], [33, 'double'], [42, 'magnet
 function buildCourse(seed, trackKey, opts = {}) {
   const track = TRACKS[trackKey] || TRACKS.nebula;
   const rng = makeRng('course:' + track.key + ':' + seed), r = () => rng();
-  const plan = POWER_PLAN.slice(); let pid = 0;
+  // power-ups and speed strips come up at planned moments (strips nudged by up to ±1.5 s at random)
+  const plan = POWER_PLAN.map(([at, kind]) => [STRIP[kind] ? at + (r() - 0.5) * 3 : at, kind]).sort((a, b) => a[0] - b[0]); let pid = 0;
+  const strips = [];
+  const tl = TL0, { sAtT, tOfS } = tl, speedAt = tl.speedAtT;
   const blocks = [], orbs = [];
   let id = 0, prevB = -1, prevEnd = -1e9, prevBlock = null, t = 2.6, first = true;
   const occ = (len) => (len + 2 * SPHERE_R); // road length a block + the sphere cover
   const mk = (lane, s0, s1) => { const h = { id: id++, kind: 'spike', lane, s0, s1, tA: tOfS(s0 - SPHERE_R), tB: tOfS(s1 + SPHERE_R), on: -1e9, off: 1e9, per: 0, ph: 0, duty: 0, decoy: false }; blocks.push(h); return h; };
-  while (t < RACE_SECONDS + 1.2) {
+  while (t < RACE_SECONDS + 4) { // a little past the cap: boosted racers get there early
     const v = speedAt(t);
     // a power-up is due: hold the lane and leave a gap long enough to dip into the other lane for it
     const powerDue = !first && plan.length && t >= plan[0][0];
     const B = prevB < 0 ? (r() < 0.5 ? 0 : 1) : powerDue ? prevB : r() < pwl(FLIP, t) ? 1 - prevB : prevB;
     let tm = t + occ(1) / 2 / v;
-    if (powerDue) tm = Math.max(tm, tOfS(prevEnd + 2 * SPHERE_R + 0.62 * v) + occ(1) / 2 / v);
+    if (powerDue) tm = Math.max(tm, tOfS(prevEnd + 2 * SPHERE_R + (STRIP[plan[0][1]] ? 0.78 : 0.62) * v) + occ(1) / 2 / v);
     let s0 = sAtT(tm) - occ(1) / 2 + SPHERE_R, s1 = s0 + 1;
     // a lane flip needs a window to switch in: push the spikes back until there is one
     if (prevB >= 0 && B !== prevB) {
@@ -87,7 +110,8 @@ function buildCourse(seed, trackKey, opts = {}) {
     if (!first && B === prevB && prevBlock && t > 5) {
       const gapS = s0 - prevEnd - 2 * SPHERE_R;
       if (gapS / v > 0.5) {
-        if (powerDue) orbs.push({ id: orbs.length, lane: B, s: (prevEnd + s0) / 2, power: plan.shift()[1], pid: pid++ });
+        if (powerDue && STRIP[plan[0][1]]) { const mid = (prevEnd + s0) / 2; strips.push({ id: strips.length, kind: plan.shift()[1], lane: B, s0: mid - STRIP.len / 2, s1: mid + STRIP.len / 2 }); }
+        else if (powerDue) orbs.push({ id: orbs.length, lane: B, s: (prevEnd + s0) / 2, power: plan.shift()[1], pid: pid++ });
         else if (r() < 0.45) orbs.push({ id: orbs.length, lane: B, s: (prevEnd + s0) / 2, power: null });
       }
     }
@@ -111,7 +135,8 @@ function buildCourse(seed, trackKey, opts = {}) {
   layout.push({ kind: 'merge', t0: COLLAPSE_AT, t1: RACE_SECONDS + 30, finale: true });
   const startLane = 1 - (blocks.find((h) => !h.decoy)?.lane ?? 0);
   orbs.sort((a, b) => a.s - b.s);
-  return { seed, track: track.key, blocks, orbs, startLane, layout, end: sAtT(RACE_SECONDS + 4) };
+  for (const h of blocks) h.live = true; // spikes are always solid
+  return { seed, track: track.key, blocks, orbs, strips, tl, startLane, layout, end: sAtT(RACE_SECONDS + 8) };
 }
 
 // ───── the lane controller: identical for humans and bots ─────
@@ -130,6 +155,20 @@ function advanceSwap(b) {
   if (b.buf > 0) b.buf--;
 }
 const TAP_TO_FLIP = 2; // ticks from a tap to the collision lane flipping (see advanceSwap)
+/** Move one sphere along its own road for this tick: base speed × its strip effect. Then check strips it rolls onto. */
+function moveSphere(b, course, tick) {
+  const t = (tick - 1) * DT;
+  b.v = speedAt(t) * fxMul(b.fxKind, (tick - 1 - b.fxTick) * DT);
+  b.s += b.v * DT;
+  const S = course.strips;
+  for (let j = 0; j < S.length; j++) {
+    const st = S[j];
+    if (b.s < st.s0 - SPHERE_R || b.s > st.s1 + SPHERE_R || b.cl !== (st.lane ^ b.mirror) || b.strips.includes(st.id)) continue;
+    b.strips.push(st.id); b.fxKind = st.kind; b.fxTick = tick;
+  }
+}
+/** Index of the first spike that could still touch a sphere at distance s (spikes are sorted by start). */
+function firstBlock(H, s) { let lo = 0, hi = H.length; while (lo < hi) { const m = (lo + hi) >> 1; if (H[m].s0 < s - 40) lo = m + 1; else hi = m; } return lo; }
 
 /** First solid hazard on `lane` (as this sphere sees it) between s and s + ahead; null if the way is clear. */
 function threatOn(course, b, lane, s, ahead, from, fooled) {
@@ -138,7 +177,6 @@ function threatOn(course, b, lane, s, ahead, from, fooled) {
     const h = H[j];
     if (h.s0 - SPHERE_R > s + ahead) break;
     if ((h.lane ^ b.mirror) !== lane || h.s1 + SPHERE_R <= s) continue;
-    if (h.live === undefined) h.live = hazardLive(h, 0.03);
     if (h.live || (fooled && fooled(h))) return h;
   }
   return null;
@@ -170,19 +208,19 @@ function createRound(cfg, rng = {}) {
     const m = order.indexOf(p.i) & 1, lane = course.startLane ^ m;
     return { i: p.i, name: p.name || ROSTER[p.i][0], color: ROSTER[p.i][1], glyph: ROSTER[p.i][2], human: !!p.human, skill: p.skill ?? 0.85, skin: p.skin | 0,
       mirror: m, target: lane, from: lane, cl: lane, swapT: 0, buf: 0, lastTap: -99, taps: 0, alive: true, orbs: 0, got: [],
-      shield: 0, immuneS: -1, magnetT: 0, doubleT: 0, shieldUsedTick: 0,
-      deathTick: 0, killer: -1, place: 0, plan: 0, planFor: -1, fooled: {}, wantOrb: {}, ai: p.ai || null, active: cfg.active.includes(p.i) };
+      shield: 0, immuneS: -1, magnetT: 0, doubleT: 0, shieldUsedTick: 0, s: 0, v: 0, fxKind: null, fxTick: -999, strips: [],
+      deathTick: 0, killer: -1, place: 0, plan: 0, planFor: -1, fooled: {}, want: {}, ai: p.ai || null, active: cfg.active.includes(p.i) };
   });
   const byI = new Map(spheres.map((b) => [b.i, b]));
   const active = cfg.active.map((i) => byI.get(i));
-  let tick = 0, t = 0, s = 0, winner = null, bi = 0, oi = 0;
+  let tick = 0, t = 0, s = 0, winner = null, bi = 0, oi = 0; // s = the leader's distance; every sphere has its own b.s
   const H = course.blocks, O = course.orbs;
   const finishOrder = []; // eliminated, earliest first
   function decide(cands, why) {
     let best = null;
-    const better = (a, c) => a.orbs !== c.orbs ? a.orbs > c.orbs : a.taps !== c.taps ? a.taps < c.taps : tieOrder.indexOf(a.i) < tieOrder.indexOf(c.i);
+    const better = (a, c) => a.s !== c.s ? a.s > c.s : a.orbs !== c.orbs ? a.orbs > c.orbs : a.taps !== c.taps ? a.taps < c.taps : tieOrder.indexOf(a.i) < tieOrder.indexOf(c.i);
     for (const b of cands) if (!best || better(b, best)) best = b;
-    R.decidedBy = cands.length < 2 ? why : cands.some((b) => b.orbs !== best.orbs) ? 'orbs' : cands.some((b) => b.taps !== best.taps) ? 'taps' : 'draw';
+    R.decidedBy = cands.length < 2 ? why : cands.some((b) => b.s !== best.s) ? 'distance' : cands.some((b) => b.orbs !== best.orbs) ? 'orbs' : cands.some((b) => b.taps !== best.taps) ? 'taps' : 'draw';
     return best;
   }
   function botTap(b) {
@@ -199,11 +237,13 @@ function createRound(cfg, rng = {}) {
     return (b.ai = { react: 6 + Math.round(k * 14), sigma: 0.6 + k * 7, fool: k * 0.45, lapse: (k + 0.1) * 0.06, greed: b.skill > 0.7 ? 0.75 : 0.3, aim: k * 0.6 });
   }
   function botThink(b) {
-    const ai = aiOf(b);
+    const ai = aiOf(b), s = b.s, v = Math.max(1, b.v || speedAt(t)), bi = firstBlock(H, s);
     if (b.plan && tick >= b.plan) { b.plan = 0; return true; }
     if (b.plan || b.swapT > 0) return false;
-    const ahead = speedAt(t) * 1.6;
-    const fooled = (h) => h.decoy && h.kind !== 'gate' && h.kind !== 'teeth' && (b.fooled[h.id] ??= RNG() < ai.fool);
+    const ahead = v * 1.6;
+    // the tick this sphere reaches x: step its own speed forward, strip effect included
+    const tickAtS = (x) => { let ss = s, k = tick; while (ss < x && k < tick + 600) { k++; ss += speedAt((k - 1) * DT) * fxMul(b.fxKind, (k - 1 - b.fxTick) * DT) * DT; } return k; };
+    const fooled = () => false;
     const L2 = 1 - b.target;
     // the latest point the flip can happen so the other lane is clear from there up to sb
     const windowTo = (sb) => {
@@ -211,8 +251,7 @@ function createRound(cfg, rng = {}) {
       for (let j = bi; j < H.length; j++) {
         const h = H[j]; if (h.s0 - SPHERE_R >= sb) break;
         if ((h.lane ^ b.mirror) !== L2 || h.s1 + SPHERE_R <= s) continue;
-        if (h.live === undefined) h.live = hazardLive(h, 0.03);
-        if (h.live || fooled(h)) sa = Math.max(sa, h.s1 + SPHERE_R + 0.02);
+        sa = Math.max(sa, h.s1 + SPHERE_R + 0.02);
       }
       return sa;
     };
@@ -227,16 +266,19 @@ function createRound(cfg, rng = {}) {
       b.plan = k; return false;
     };
     const th = threatOn(course, b, b.target, s, ahead, bi, fooled);
-    // an orb on the other lane before any threat here: detour for it if the window looks comfortable
-    for (let j = oi; j < O.length; j++) {
-      const o = O[j]; if (o.s > s + ahead || (th && o.s > th.s0)) break;
-      if ((o.lane ^ b.mirror) !== L2 || b.got.includes(o.id) || o.s < s + 1 || b.planFor === 'o' + o.id) continue;
-      if (o.power === 'shield' && b.shield) continue; // already holding one
-      const want = b.wantOrb[o.id] ??= RNG() < ai.greed;
-      if (!want) continue;
-      const sb = o.s - 0.1, sa = windowTo(sb);
-      if (sb - sa < speedAt(t) * 0.12) continue; // too tight to bother
-      return schedule(sa, sb, 'o' + o.id);
+    // pickups on the other lane before any threat here: orbs and power-ups (greedy bots), boost strips
+    // (good bots like them), slow strips (shaky bots take them for the breathing room)
+    const wants = [];
+    for (const o of O) if (o.s > s + 1 && o.s < s + ahead && (o.lane ^ b.mirror) === L2 && !b.got.includes(o.id) && !(o.power === 'shield' && b.shield)) wants.push({ id: 'o' + o.id, at: o.s - 0.1, p: ai.greed });
+    for (const st of course.strips) if (st.s0 > s + 1 && st.s0 < s + ahead && (st.lane ^ b.mirror) === L2 && !b.strips.includes(st.id)) wants.push({ id: 'x' + st.id, at: st.s0 + 0.4, p: ai.strips === 0 ? 0 : st.kind === 'boost' ? (b.skill > 0.75 ? 0.7 : 0.25) : (b.skill < 0.7 ? 0.45 : 0.08) });
+    wants.sort((x, y) => x.at - y.at);
+    for (const w of wants) {
+      if (th && w.at > th.s0) break;
+      if (b.planFor === w.id) continue;
+      if (!(b.want[w.id] ??= RNG() < w.p)) continue;
+      const sa = windowTo(w.at);
+      if (w.at - sa < v * 0.12) continue; // too tight to bother
+      return schedule(sa, w.at, w.id);
     }
     if (!th || b.planFor === th.id) return false;
     const sb = th.s0 - SPHERE_R - 0.02;
@@ -249,20 +291,22 @@ function createRound(cfg, rng = {}) {
     /** inputs: { [seat]: packedInt }. Missing seats are played by the bot (own RNG stream) and written back. */
     step(inputs) {
       if (winner) return winner;
-      tick++; t = tick * DT; s = sAtTick(tick);
-      while (bi < H.length && H[bi].s1 + SPHERE_R < s - 40) bi++; // long walls stay in range; 40 u covers the longest
+      tick++; t = tick * DT;
       for (const b of active) {
         if (!b.alive) continue;
         let p = inputs[b.i];
         if (p == null) { p = botTap(b) ? TAP : 0; inputs[b.i] = p; }
         if ((p >>> 0) & TAP) sphereTap(b, tick);
         advanceSwap(b);
+        moveSphere(b, course, tick);
       }
+      s = 0; for (const b of active) if (b.s > s) s = b.s;
       // collisions (track coordinates only)
       const died = [];
       for (const b of active) {
         if (!b.alive) continue;
-        for (let j = bi; j < H.length; j++) {
+        const s = b.s;
+        for (let j = firstBlock(H, s); j < H.length; j++) {
           const h = H[j];
           if (h.s0 - SPHERE_R >= s) break;
           if (h.s1 + SPHERE_R <= s || (h.lane ^ b.mirror) !== b.cl || s < b.immuneS) continue;
@@ -274,11 +318,10 @@ function createRound(cfg, rng = {}) {
         }
       }
       // orbs
-      while (oi < O.length && O[oi].s + ORB_R + SPHERE_R < s) oi++;
-      for (let j = oi; j < O.length && O[j].s - ORB_R - SPHERE_R < s; j++) {
+      for (let j = 0; j < O.length; j++) {
         const o = O[j];
         for (const b of active) {
-          if (!b.alive || b.got.includes(o.id)) continue;
+          if (!b.alive || b.got.includes(o.id) || Math.abs(o.s - b.s) > ORB_R + SPHERE_R) continue;
           const inLane = b.cl === (o.lane ^ b.mirror);
           if (!(inLane || (!o.power && tick < b.magnetT))) continue;
           b.got.push(o.id);
@@ -296,7 +339,7 @@ function createRound(cfg, rng = {}) {
       else if (tick >= RACE_TICKS) winner = decide(alive, 'time');
       if (winner) {
         // places: winner first, then survivors / simultaneous fallers by the same rule, then latest eliminations
-        const rest = active.filter((b) => b !== winner).sort((a, c) => (c.alive - a.alive) || (c.deathTick - a.deathTick) || (c.orbs - a.orbs) || (a.taps - c.taps) || (tieOrder.indexOf(a.i) - tieOrder.indexOf(c.i)));
+        const rest = active.filter((b) => b !== winner).sort((a, c) => (c.alive - a.alive) || (c.deathTick - a.deathTick) || (c.s - a.s) || (c.orbs - a.orbs) || (a.taps - c.taps) || (tieOrder.indexOf(a.i) - tieOrder.indexOf(c.i)));
         [winner, ...rest].forEach((b, k) => { b.place = k + 1; });
       }
       return winner;
@@ -304,7 +347,7 @@ function createRound(cfg, rng = {}) {
     /** Exact fingerprint of the race state. */
     hash() {
       const n = [t, s];
-      for (const b of active) n.push(b.target, b.from, b.cl, b.swapT, b.buf, b.lastTap, b.alive ? 1 : 0, b.orbs, b.deathTick, b.shield, b.immuneS, b.magnetT, b.doubleT);
+      for (const b of active) n.push(b.target, b.from, b.cl, b.swapT, b.buf, b.lastTap, b.alive ? 1 : 0, b.orbs, b.deathTick, b.shield, b.immuneS, b.magnetT, b.doubleT, b.s, b.fxTick, b.fxKind === 'boost' ? 1 : b.fxKind === 'slow' ? 2 : 0);
       return hashNums(n);
     },
     coast() {},
@@ -314,6 +357,7 @@ function createRound(cfg, rng = {}) {
 
 /** Replays a course with a flawless driver (taps in the middle of every window). Courses it can't finish are rebuilt. */
 function pilotSurvives(course) {
+  const { sAtTick, tickAtS, speedAtT: speedAt } = TL0; // flawless driver at base speed, takes no strips
   const H = course.blocks, b = { mirror: 0, target: course.startLane, from: course.startLane, cl: course.startLane, swapT: 0, buf: 0, lastTap: -99, taps: 0 };
   let plan = 0, planFor = -1, bi = 0;
   for (let tick = 1; tick <= RACE_TICKS; tick++) {
@@ -326,7 +370,7 @@ function pilotSurvives(course) {
       if (th && th.id !== planFor) {
         planFor = th.id;
         const sb = th.s0 - SPHERE_R - 0.02; let sa = s + 0.05;
-        for (let j = bi; j < H.length; j++) { const h = H[j]; if (h.s0 - SPHERE_R >= sb) break; if (h.lane !== 1 - b.target || h.s1 + SPHERE_R <= s) continue; if (h.live === undefined) h.live = hazardLive(h, 0.03); if (h.live) sa = Math.max(sa, h.s1 + SPHERE_R + 0.02); }
+        for (let j = bi; j < H.length; j++) { const h = H[j]; if (h.s0 - SPHERE_R >= sb) break; if (h.lane !== 1 - b.target || h.s1 + SPHERE_R <= s) continue; if (h.live) sa = Math.max(sa, h.s1 + SPHERE_R + 0.02); }
         if (sa <= sb) { const k = Math.max(tickAtS((sa + sb) / 2) - TAP_TO_FLIP, b.lastTap + DEBOUNCE_TICKS); if (k <= tick) tap = true; else plan = k; }
       }
     }

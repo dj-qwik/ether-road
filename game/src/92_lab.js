@@ -64,7 +64,7 @@ const LAB = (() => {
   function frame() {
     if (!hudEl || hudEl.hidden || !game.R) return;
     const R = game.R, me = R.spheres[0];
-    hudEl.innerHTML = `LAB · ${esc(SIM0.TRACKS[game.lab.key].name)} · seed ${game.lab.seed} · ${R.t.toFixed(1)} s · s ${R.s.toFixed(0)} · ${game.speed}× · ${R.god.has(0) ? 'invincible' : 'can crash'} · ${game.lab.auto ? 'autopilot' : 'you drive'}${me ? ` · lane ${me.cl}${me.shield ? ' · shield' : ''}` : ''}<br><kbd>R</kbd> restart <kbd>N</kbd> new <kbd>T</kbd> track <kbd>J</kbd> +5 s <kbd>F</kbd> speed <kbd>G</kbd> god <kbd>P</kbd> auto <kbd>Esc</kbd> lab`;
+    hudEl.innerHTML = `LAB · ${esc(SIM0.TRACKS[game.lab.key].name)} · seed ${game.lab.seed} · ${R.t.toFixed(1)} s · ${me ? Math.round(me.s) : 0} m · ${me ? Math.round(me.v) : 0} u/s · ${game.speed}× · ${R.god.has(0) ? 'invincible' : 'can crash'} · ${game.lab.auto ? 'autopilot' : 'you drive'}${me ? ` · lane ${me.cl}${me.shield ? ' · shield' : ''}` : ''}<br><kbd>R</kbd> restart <kbd>N</kbd> new <kbd>T</kbd> track <kbd>J</kbd> +5 s <kbd>F</kbd> speed <kbd>G</kbd> god <kbd>P</kbd> auto <kbd>Esc</kbd> lab`;
   }
   function resultCard() {
     const R = game.R, w = R.winner;

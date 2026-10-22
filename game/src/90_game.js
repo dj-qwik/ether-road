@@ -93,7 +93,7 @@ function practiceCard() {
     <div class="row"><button class="btn primary big" id="practiceGo">Start</button><button class="btn ghost" id="back">Back</button></div>
   </div>`;
 }
-const HOWTO = ['Your ball rolls forward on its own. Tap to switch lanes.', 'Red spikes are the only danger. Touch them and you are out.', 'Power-ups sit in the risky lane: a shield, an orb magnet, double orbs.', 'Gold orbs break ties at the 60 s cap.'];
+const HOWTO = ['Your ball rolls forward on its own. Tap to switch lanes.', 'Red spikes are the only danger. Touch them and you are out.', 'Optional strips: cyan boost (faster), amber slow (more time). Power-ups: shield, orb magnet, double orbs.', 'Still alive at 60 s? Furthest along wins, then most orbs.'];
 function introCard(seconds, online) {
   const A = SIM0.ARENAS[game.key] || SIM0.ARENAS.void;
   return `<div class="card intro">
@@ -107,13 +107,13 @@ function introCard(seconds, online) {
 }
 function resultCard() {
   const R = game.R, w = R.winner, mine = w && w.i === game.me, places = [...R.active].sort((a, b) => a.place - b.place);
-  const why = R.decidedBy === 'orbs' ? 'Decided by orbs at the cap.' : R.decidedBy === 'taps' ? 'Same orbs at the cap: fewer taps won.' : R.decidedBy === 'draw' ? 'Dead level at the cap: settled by the draw fixed before the start.' : R.decidedBy === 'time' ? 'Survived to the cap.' : '';
+  const why = R.decidedBy === 'distance' ? 'More than one racer reached the cap: furthest along wins.' : R.decidedBy === 'orbs' ? 'Decided by orbs at the cap.' : R.decidedBy === 'taps' ? 'Same orbs at the cap: fewer taps won.' : R.decidedBy === 'draw' ? 'Dead level at the cap: settled by the draw fixed before the start.' : R.decidedBy === 'time' ? 'Survived to the cap.' : '';
   const cashOnline = game.mode === 'online' && CASH.isCashMatch();
   const life = (b) => (b === w ? (b.alive ? `${R.t.toFixed(1)} s, still rolling` : `${(b.deathTick / 60).toFixed(1)} s`) : b.alive ? `${R.t.toFixed(1)} s` : `out at ${(b.deathTick / 60).toFixed(1)} s`);
   return `<div class="card result">
     <h1 class="big" style="color:${w.color}">${mine ? 'You won' : `${esc(w.name)} wins`}</h1>
     ${why ? `<p>${why}</p>` : ''}
-    <div class="places">${places.map((b) => `<div class="place${b === w ? ' first' : ''}" style="--c:${b.color}"><span class="n">${b.place}</span><i></i><b>${esc(b.i === game.me ? 'You' : b.name)}</b><span class="st">${life(b)} · ${b.orbs} orb${b.orbs === 1 ? '' : 's'}</span></div>`).join('')}</div>
+    <div class="places">${places.map((b) => `<div class="place${b === w ? ' first' : ''}" style="--c:${b.color}"><span class="n">${b.place}</span><i></i><b>${esc(b.i === game.me ? 'You' : b.name)}</b><span class="st">${life(b)} · ${Math.round(b.s)} m · ${b.orbs} orb${b.orbs === 1 ? '' : 's'}</span></div>`).join('')}</div>
     ${cashOnline ? CASH.championExtra(w) : game.mode === 'online' ? '<p>Free race: nothing was at stake.</p>' : ''}
     <div class="row"><button class="btn primary big" id="again">${game.mode === 'online' ? (cashOnline ? 'Race again' : 'Find another race') : 'Race again'}</button><button class="btn ghost big" id="home">Home</button></div>
   </div>`;
@@ -201,7 +201,7 @@ function stepLocal(now, dt) {
 }
 // one tick plus everything the player should hear and see because of it
 function stepWithFx(step) {
-  const R = game.R, me = R.spheres.find((b) => b.i === game.me), before = me ? { target: me.target, orbs: me.orbs, alive: me.alive, got: me.got.length, used: me.shieldUsedTick } : null;
+  const R = game.R, me = R.spheres.find((b) => b.i === game.me), before = me ? { target: me.target, orbs: me.orbs, alive: me.alive, got: me.got.length, used: me.shieldUsedTick, fx: me.fxTick } : null;
   const prevT = R.t;
   step();
   if (me && before && game.mode !== 'online') { // online: your own sounds come from the prediction (95_net)
@@ -209,6 +209,7 @@ function stepWithFx(step) {
     if (me.orbs > before.orbs) { SFX.orb(); }
     else if (me.got.length > before.got) { const o = R.course.orbs.find((x) => x.id === me.got[me.got.length - 1]); if (o && o.power) { SFX.power(); callout(o.power === 'shield' ? 'SHIELD' : o.power === 'magnet' ? 'MAGNET' : 'DOUBLE ORBS', o.power === 'shield' ? '#6FB7FF' : o.power === 'magnet' ? '#B48CFF' : '#FFF1A8', o.power === 'shield' ? 'The next hit passes through you' : o.power === 'magnet' ? 'Orbs in both lanes for 4 s' : 'Orbs count twice for 6 s'); padRumble(0.3, 80); } }
     if (me.shieldUsedTick !== before.used) { SFX.shieldPop(); padRumble(0.6, 160); }
+    if (me.fxTick !== before.fx) stripFx(me.fxKind);
     if (before.alive && !me.alive) { SFX.crash(true); padRumble(1, 380); $('#flash').classList.add('on'); setTimeout(() => $('#flash').classList.remove('on'), 60); WORLD.shake(1.2); }
   }
   for (const b of R.active) if (!b.alive && !game.outSeen.has(b.i)) {
@@ -222,10 +223,14 @@ function stepWithFx(step) {
   // near miss: you flipped out of a lane just before a solid hazard there
   if (game.mode !== 'online' && me && me.alive && R.tick - game.flipTick < 14 && R.tick - game.flipTick > 2) {
     for (const h of R.course.blocks) {
-      if (h.s0 - SPHERE_R > R.s || h.s0 - SPHERE_R <= R.s - speedAt(R.t) * DT) continue;
+      if (h.s0 - SPHERE_R > me.s || h.s0 - SPHERE_R <= me.s - me.v * DT) continue;
       if ((h.lane ^ me.mirror) === 1 - me.cl && SIM0.hazardOn(h, R.t)) { SFX.near(); padRumble(0.15, 50); game.flipTick = -99; break; }
     }
   }
+}
+function stripFx(kind) {
+  if (kind === 'boost') { callout('BOOST', '#22E6FF', 'Faster for 2 s: more distance, less time to react'); SFX.boost(); padRumble(0.4, 220); WORLD.shake(0.5); }
+  else if (kind === 'slow') { callout('SLOW', '#FFB347', 'Slower for 2 s: more time to react, less distance'); SFX.slow(); padRumble(0.25, 160); }
 }
 function raceOver() {
   const R = game.R, w = R.winner;
@@ -243,12 +248,13 @@ function renderHud(force) {
   const R = game.R; if (!R || $('#hud').hidden) return;
   const t = game.phase === 'play' ? Math.min(RACE_SECONDS, R.t) : game.phase === 'done' ? R.t : 0, left = Math.max(0, Math.ceil(RACE_SECONDS - t));
   const ring = $('#hRing'); if (ring) { ring.setAttribute('stroke-dashoffset', String(163.4 * clamp(t / RACE_SECONDS, 0, 1))); ring.setAttribute('stroke', t >= COLLAPSE_AT ? '#FF2E5B' : '#22e6ff'); }
-  const key = `${left}|${game.phase}|${R.active.map((b) => `${b.alive ? 1 : 0}${b.orbs}${b.shield}${R.tick < b.magnetT ? 1 : 0}${R.tick < b.doubleT ? 1 : 0}`).join('')}`;
+  const key = `${left}|${game.phase}|${R.active.map((b) => `${b.alive ? 1 : 0}${Math.round(b.s / 2)}${b.orbs}${b.shield}${R.tick < b.magnetT ? 1 : 0}${R.tick < b.doubleT ? 1 : 0}`).join('')}`;
   if (!force && key === lastHud) return; lastHud = key;
   $('#hTime').textContent = left; $('#hClock').classList.toggle('low', game.phase === 'play' && left <= 10);
   $('#hPhase').textContent = t >= COLLAPSE_AT ? 'Final collapse' : 'Last sphere alive wins';
   const pw = (b) => `${b.shield ? '<span class="pw sh" title="Shield">⬡</span>' : ''}${R.tick < b.magnetT ? '<span class="pw mg" title="Magnet">∪</span>' : ''}${R.tick < b.doubleT ? '<span class="pw db" title="Double orbs">×2</span>' : ''}`;
-  $('#hField').innerHTML = R.active.map((b) => `<div class="racer${b.i === game.me ? ' you' : ''}${b.alive ? '' : ' out'}" style="--c:${b.color}"><i></i>${esc(b.i === game.me ? 'You' : b.name)}${pw(b)}${b.orbs ? ` <em>◆${b.orbs}</em>` : ''}</div>`).join('');
+  const lead = Math.max(...R.active.map((b) => b.s)), gap = (b) => { const d = Math.round(lead - b.s); return d >= 1 ? `<span class="gap">−${d} m</span>` : ''; };
+  $('#hField').innerHTML = R.active.map((b) => `<div class="racer${b.i === game.me ? ' you' : ''}${b.alive ? '' : ' out'}" style="--c:${b.color}"><i></i>${esc(b.i === game.me ? 'You' : b.name)}${pw(b)}${gap(b)}${b.orbs ? ` <em>◆${b.orbs}</em>` : ''}</div>`).join('');
   const me = R.spheres.find((b) => b.i === game.me), banner = $('#banner');
   const showTip = game.mode !== 'attract' && game.phase === 'play' && R.t < 4;
   banner.hidden = !(showTip || (me && !me.alive && game.phase === 'play'));
@@ -264,14 +270,15 @@ function viewOf(now) {
   const tNow = game.phase === 'intro' ? 0 : game.clock / 1000;
   const frac = clamp(game.clock / TICK_MS - R.tick, 0, 1);
   const tDraw = game.phase === 'done' ? R.t : Math.min(tNow, R.t + DT);
-  const sDraw = SIM0.sAtT(Math.max(0, tDraw)) + Math.min(0, tDraw) * 20;
+  const fr = game.phase === 'play' ? frac : 0, pre = Math.min(0, tDraw) * 20; // before GO everyone waits behind the line
+  const sOf = (b) => (b.alive ? b.s + b.v * DT * fr : b.s) + pre;
   const alive = R.active.filter((b) => b.alive);
   let follow = game.me;
   const me = R.spheres.find((b) => b.i === game.me);
   if (!me || (!me.alive && game.clock / 1000 - me.deathTick / 60 > 0.9)) follow = (R.winner && game.phase === 'done' ? R.winner : alive.sort((a, b) => b.orbs - a.orbs)[0] || R.active[0]).i;
   return {
-    t: tDraw, s: sDraw, phase: game.phase, follow,
-    spheres: R.active.map((b) => ({ i: b.i, x: sphereX(b, frac), alive: b.alive, deadS: SIM0.sAtTick(b.deathTick), winner: R.winner === b, ...powersOf(b, R) })),
+    t: tDraw, s: sOf(R.spheres.find((b) => b.i === follow) || R.active[0]), phase: game.phase, follow,
+    spheres: R.active.map((b) => ({ i: b.i, x: sphereX(b, frac), s: sOf(b), v: b.alive ? b.v : 0, alive: b.alive, winner: R.winner === b, ...powersOf(b, R) })),
   };
 }
 let last = performance.now();

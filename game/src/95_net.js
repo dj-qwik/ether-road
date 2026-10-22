@@ -69,7 +69,7 @@ const NET = (() => {
   const withNames = (m) => ({ ...m, players: m.players.map((p) => ({ ...p, name: p.i === game.me ? 'You' : p.name })) });
   function round(m) {
     if (!N.F) return;
-    N.end = null; N.shown = false; N.over = false; N.taps = []; N.confirmed = 0;
+    N.end = null; N.shown = false; N.over = false; N.taps = []; N.confirmed = 0; N.stripSeen = new Set();
     const R = N.F.round(withNames(m));
     game.R = R; game.key = m.key; game.outSeen = new Set(); game.flipTick = 0;
     WORLD.setRace(R, game.me, m.key);
@@ -109,15 +109,15 @@ const NET = (() => {
   const P = { b: null };
   function predictMe(R, tickNow) {
     const me = R.spheres.find((b) => b.i === game.me); if (!me || !R.active.includes(me)) return null;
-    const b = { mirror: me.mirror, target: me.target, from: me.from, cl: me.cl, swapT: me.swapT, buf: me.buf, lastTap: me.lastTap, taps: me.taps, alive: me.alive, deathTick: me.deathTick, shield: me.shield, immuneS: me.immuneS };
+    const b = { mirror: me.mirror, target: me.target, from: me.from, cl: me.cl, swapT: me.swapT, buf: me.buf, lastTap: me.lastTap, taps: me.taps, alive: me.alive, deathTick: me.deathTick, shield: me.shield, immuneS: me.immuneS, s: me.s, v: me.v, fxKind: me.fxKind, fxTick: me.fxTick, strips: me.strips.slice() };
     if (!b.alive || R.winner) return b;
     const pend = N.taps.slice(N.confirmed), H = R.course.blocks;
     let pi = 0;
     for (let k = R.tick + 1; k <= Math.min(tickNow, RACE_TICKS); k++) {
       while (pi < pend.length && Math.max(pend[pi], R.tick + 1) <= k) { SIM0.sphereTap(b, k); pi++; }
-      SIM0.advanceSwap(b);
-      const s = SIM0.sAtTick(k), t = k * DT;
-      for (let q = lowerBlock(H, s - 60); q < H.length; q++) {
+      SIM0.advanceSwap(b); SIM0.moveSphere(b, R.course, k);
+      const s = b.s, t = k * DT;
+      for (let q = SIM0.firstBlock(H, s); q < H.length; q++) {
         const h = H[q]; if (h.s0 - SPHERE_R >= s) break;
         if (h.s1 + SPHERE_R <= s || (h.lane ^ b.mirror) !== b.cl || s < b.immuneS) continue;
         if (SIM0.hazardOn(h, t)) { if (b.shield) { b.shield = 0; b.immuneS = h.s1 + SPHERE_R + 0.5; break; } b.alive = false; b.deathTick = k; break; }
@@ -153,6 +153,7 @@ const NET = (() => {
       const tickNow = Math.floor(t * 60);
       const pb = predictMe(R, tickNow);
       if (pb && P.b && P.b.target !== pb.target && pb.alive) SFX.lane(pb.target);
+      if (pb && P.b && pb.fxTick !== P.b.fxTick && pb.alive) stripFx(pb.fxKind);
       if (pb && P.b && P.b.alive && !pb.alive) { SFX.crash(true); padRumble(1, 380); $('#flash').classList.add('on'); setTimeout(() => $('#flash').classList.remove('on'), 60); WORLD.shake(1.2); }
       P.b = pb;
       if (R.winner && !N.over) { N.over = true; roundOver(); }
@@ -170,20 +171,20 @@ const NET = (() => {
     const R = game.R; if (!R) return null;
     const t = game.phase === 'intro' ? 0 : (serverNow() - N.at) / 1000;
     const tDraw = game.phase === 'done' ? R.t : Math.min(t, RACE_SECONDS);
-    const sDraw = SIM0.sAtT(Math.max(0, tDraw)) + Math.min(0, tDraw) * 20;
-    const tickNow = Math.floor(Math.max(0, tDraw) * 60), frac = Math.max(0, tDraw) * 60 - tickNow;
+    const tickNow = Math.floor(Math.max(0, tDraw) * 60), frac = Math.max(0, tDraw) * 60 - tickNow, pre = Math.min(0, tDraw) * 20;
+    // rivals are confirmed a few ticks behind "now": carry them forward at their current speed
+    const ahead = game.phase === 'play' ? Math.max(0, tickNow - R.tick + frac) * DT : 0;
+    const sOf = (b) => (b.alive ? b.s + b.v * ahead : b.s) + pre;
     const pb = game.phase === 'play' ? P.b : null;
     const me = R.spheres.find((b) => b.i === game.me);
     const meDead = pb ? !pb.alive : me && !me.alive;
     let follow = game.me;
     if (!me || !R.active.includes(me) || (meDead && t - (pb ? pb.deathTick : me.deathTick) / 60 > 0.9)) follow = (R.winner || R.active.filter((b) => b.alive && b.i !== game.me).sort((a, b) => b.orbs - a.orbs)[0] || R.active[0]).i;
-    return {
-      t: tDraw, s: sDraw, phase: game.phase, follow,
-      spheres: R.active.map((b) => {
-        if (b.i === game.me && pb) return { i: b.i, x: sphereX(pb, frac), alive: pb.alive, deadS: SIM0.sAtTick(pb.deathTick), winner: R.winner === b, ...powersOf(b, R) };
-        return { i: b.i, x: sphereX(b, 0), alive: b.alive, deadS: SIM0.sAtTick(b.deathTick), winner: R.winner === b, ...powersOf(b, R) };
-      }),
-    };
+    const spheres = R.active.map((b) => {
+        if (b.i === game.me && pb) return { i: b.i, x: sphereX(pb, frac), s: (pb.alive ? pb.s + pb.v * DT * frac : pb.s) + pre, v: pb.alive ? pb.v : 0, alive: pb.alive, winner: R.winner === b, ...powersOf(b, R) };
+        return { i: b.i, x: sphereX(b, 0), s: sOf(b), v: b.alive ? b.v : 0, alive: b.alive, winner: R.winner === b, ...powersOf(b, R) };
+      });
+    return { t: tDraw, phase: game.phase, follow, spheres, s: (spheres.find((x) => x.i === follow) || spheres[0]).s };
   }
   // ── screens
   function setupCard() {
