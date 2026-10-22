@@ -56,7 +56,7 @@ const WORLD = (() => {
       glowTex: glowTexture(),
     };
     G = {
-      cone: new T.ConeGeometry(0.27, 1.05, 4), ico: new T.IcosahedronGeometry(0.33, 0), box: new T.BoxGeometry(1, 1, 1), oct: new T.OctahedronGeometry(0.26, 0),
+      cone: new T.ConeGeometry(0.24, 0.72, 4), ico: new T.IcosahedronGeometry(0.33, 0), box: new T.BoxGeometry(1, 1, 1), oct: new T.OctahedronGeometry(0.26, 0),
       ring: new T.RingGeometry(0.62, 0.72, 40), tetra: new T.TetrahedronGeometry(0.12, 0), sph: new T.SphereGeometry(SPHERE_R, 40, 28), core: new T.SphereGeometry(SPHERE_R * 0.55, 20, 14),
       band: new T.TorusGeometry(SPHERE_R * 1.01, 0.022, 8, 56), wave: new T.RingGeometry(0.9, 1.05, 48),
     };
@@ -199,36 +199,36 @@ const WORLD = (() => {
   }
   const laneX = (lane) => (lane ? LANE_X : -LANE_X);
   function setLayer(rl, layer) { rl.layer = layer; rl.grp.traverse((o) => { if (o.isLight) o.layers.enableAll(); else o.layers.set(layer); }); }
+  // The one hazard: red spikes. A short hazard is one cluster of three; a long one is a continuous row that follows
+  // the rail's curve, over a glowing red strip on the road, so a whole lane being closed reads at a glance.
+  const _q = () => new T.Quaternion(), _v = () => new T.Vector3();
   function makeHazard(h, rl, root) {
-    const lane = h.lane ^ rl.b.mirror, x = laneX(lane), len = h.s1 - h.s0, mid = (h.s0 + h.s1) / 2;
-    const g = new T.Group(); orient(g, rl, mid, x, 0); g.visible = false; root.add(g);
-    const it = { h, rl, g, s0: h.s0 - 4, s1: h.s1 + 2, kind: h.kind, parts: {} };
-    const mine = rl.b.i === race0.me, swap = (mat) => (mine ? mat : mat === M.hotSolid || mat === M.wallBody ? M.otherSolid : mat === M.hotGlow ? M.otherGlow : mat);
-    const add = (geo, mat, sx, sy, sz, px = 0, py = 0, pz = 0) => { const m = new T.Mesh(geo, swap(mat)); m.scale.set(sx, sy, sz); m.position.set(px, py, pz); g.add(m); return m; };
-    it.mine = mine;
-    switch (h.kind) {
-      case 'spike': for (const dx of [-0.42, 0, 0.42]) add(G.cone, M.hotSolid, 1, 1, 1, dx, 0.52, 0); add(G.box, M.hotGlow, 1.5, 0.04, len, 0, 0.02, 0); break;
-      case 'mine': it.parts.m = add(G.ico, M.hotSolid, 1, 1, 1, 0, 0.55, 0); add(G.box, M.hotGlow, 0.9, 0.03, 0.9, 0, 0.02, 0); break;
-      case 'wall': add(G.box, M.wallBody, 1.5, 0.62, len, 0, 0.31, 0); add(G.box, M.hotGlow, 1.52, 0.06, len, 0, 0.64, 0); add(G.box, M.hotGlow, 0.05, 0.62, 0.05, -0.75, 0.31, len / 2); add(G.box, M.hotGlow, 0.05, 0.62, 0.05, 0.75, 0.31, len / 2); break;
-      case 'laser':
-        it.parts.p1 = add(G.box, M.dim, 0.12, 1.2, 0.12, -0.78, 0.6, 0); it.parts.p2 = add(G.box, M.dim, 0.12, 1.2, 0.12, 0.78, 0.6, 0);
-        it.parts.beam = add(G.box, M.hotGlow, 1.5, 0.07, 0.07, 0, 0.45, 0); it.parts.beam2 = add(G.box, M.hotGlow, 1.5, 0.05, 0.05, 0, 0.8, 0);
-        it.parts.strip = add(G.box, M.marker, 1.5, 0.01, 0.4, 0, 0.02, 0); break;
-      case 'echo': it.parts.ghost = add(G.box, M.hotGhost, 1.4, 0.9, len, 0, 0.46, 0); it.parts.solid = add(G.box, M.hotSolid, 1.4, 0.9, len, 0, 0.46, 0); it.parts.ring = add(G.ring, M.marker, 1, 1, 1, 0, 0.03, 0); it.parts.ring.rotation.x = -Math.PI / 2; break;
-      case 'pillar': it.parts.col = add(G.box, M.hotSolid, 1.2, 2.2, Math.max(0.9, len), 0, 1.1, 0); it.parts.ring = add(G.ring, M.marker, 1.1, 1.1, 1.1, 0, 0.03, 0); it.parts.ring.rotation.x = -Math.PI / 2; break;
-      case 'crusher': it.parts.head = add(G.box, M.hotSolid, 1.42, 0.7, len, 0, 0.35, 0); add(G.box, M.dim, 0.1, 3.2, 0.1, -0.8, 1.6, 0); add(G.box, M.dim, 0.1, 3.2, 0.1, 0.8, 1.6, 0); add(G.box, M.hotGlow, 1.4, 0.04, len, 0, 0.02, 0); break;
-      case 'sweeper':
-        if (h.decoy) break;
-        it.parts.bar = add(G.box, M.hotSolid, 1.4, 0.5, Math.max(0.3, len), 0, 0.3, 0); it.parts.rail = add(G.box, M.dim, 3.4, 0.06, 0.08, x > 0 ? -0.8 : 0.8, 0.04, 0);
-        it.parts.from = (x > 0 ? -1 : 1) * 2 * LANE_X; break;
-      case 'gate': case 'teeth':
-        it.parts.panel = h.kind === 'gate' ? add(G.box, M.hotSolid, 1.45, 1.15, Math.max(0.18, len), 0, 0.58, 0) : add(G.box, M.hotSolid, 1.5, 0.16, 0.16, 0, 0.58, 0);
-        if (h.kind === 'teeth') it.parts.panel2 = add(G.box, M.hotSolid, 0.16, 1.5, 0.16, 0, 0.58, 0);
-        it.parts.off = add(G.box, M.hotGhost, 1.45, 1.15, 0.12, 0, 0.58, 0);
-        if (!h.decoy) { add(G.box, M.dim, 0.12, 1.6, 0.12, x > 0 ? 0.82 : -0.82, 0.8, 0); add(G.box, M.dim, 0.12, 1.6, 0.12, x > 0 ? -2.42 : 2.42, 0.8, 0); add(G.box, M.hotGlow, 3.3, 0.06, 0.06, x > 0 ? -0.8 : 0.8, 1.62, 0); }
-        break;
+    const lane = h.lane ^ rl.b.mirror, x = laneX(lane), len = h.s1 - h.s0;
+    const g = new T.Group(); g.visible = false; root.add(g);
+    const rows = Math.max(1, Math.round(len / 0.75)), step = len / rows, n = rows * 3;
+    const cones = new T.InstancedMesh(G.cone, M.hotSolid, n); cones.frustumCulled = false;
+    const m4 = new T.Matrix4(), q = _q(), sc = new T.Vector3(1, 1, 1);
+    let k = 0;
+    for (let r = 0; r < rows; r++) {
+      const sr = h.s0 + step * (r + 0.5), f = railAt(rl, sr, 0, 0), tl = Math.hypot(f.tx, f.ty, f.tz) || 1;
+      q.setFromRotationMatrix(_m().makeBasis(_v().set(f.sx, f.sy, f.sz), _v().set(f.ux, f.uy, f.uz), _v().set(-f.tx / tl, -f.ty / tl, -f.tz / tl)));
+      for (const dx of [-0.45, 0, 0.45]) {
+        const p = railAt(rl, sr, x + dx, 0.36);
+        sc.setScalar(1 + ((r * 7 + dx * 10) % 3) * 0.04);
+        m4.compose(_v().set(p.x, p.y, p.z), q, sc); cones.setMatrixAt(k++, m4);
+      }
     }
-    return it;
+    g.add(cones);
+    // glowing strip under the spikes
+    const N = Math.max(2, Math.ceil(len / 0.5) + 1), v = new Float32Array(N * 6), idx = [];
+    for (let i = 0; i < N; i++) {
+      const sr = h.s0 + (len * i) / (N - 1);
+      for (let e = 0; e < 2; e++) { const p = railAt(rl, sr, x + (e ? 0.74 : -0.74), 0.025); v.set([p.x, p.y, p.z], (i * 2 + e) * 3); }
+      if (i < N - 1) { const a2 = i * 2; idx.push(a2, a2 + 1, a2 + 2, a2 + 1, a2 + 3, a2 + 2); }
+    }
+    const sg = new T.BufferGeometry(); sg.setAttribute('position', new T.BufferAttribute(v, 3)); sg.setIndex(idx);
+    const strip = new T.Mesh(sg, M.hotGlow); strip.frustumCulled = false; g.add(strip);
+    return { h, rl, g, s0: h.s0 - 4, s1: h.s1 + 2, kind: h.kind, parts: {} };
   }
   const POWER_LOOK = { shield: 0x6fb7ff, magnet: 0xb48cff, double: 0xfff1a8 };
   function makeOrb(o, rl, root) {
@@ -264,6 +264,9 @@ const WORLD = (() => {
     const shieldM = new T.Mesh(new T.IcosahedronGeometry(SPHERE_R * 1.55, 1), new T.MeshBasicMaterial({ color: 0x6fb7ff, wireframe: true, transparent: true, opacity: 0.7, toneMapped: false })); shieldM.visible = false; g.add(shieldM);
     const magnetM = new T.Mesh(new T.TorusGeometry(SPHERE_R * 1.8, 0.03, 6, 48), new T.MeshBasicMaterial({ color: 0xb48cff, transparent: true, opacity: 0.85, toneMapped: false })); magnetM.rotation.x = Math.PI / 2; magnetM.visible = false; g.add(magnetM);
     const dblM = new T.Mesh(G.oct, new T.MeshBasicMaterial({ color: 0xfff1a8, toneMapped: false })); dblM.scale.setScalar(0.35); dblM.visible = false; g.add(dblM);
+    // a soft ring of your colour on the road under your ball, so you always know which ball and lane is yours
+    const mark = new T.Mesh(new T.RingGeometry(SPHERE_R * 1.25, SPHERE_R * 1.75, 40), new T.MeshBasicMaterial({ color: col.clone().multiplyScalar(1.2), transparent: true, opacity: 0.75, depthWrite: false, toneMapped: false, side: T.DoubleSide }));
+    mark.rotation.x = -Math.PI / 2; mark.position.y = -SPHERE_R + 0.02; mark.visible = false; g.add(mark);
     const halo = new T.Sprite(new T.SpriteMaterial({ map: M.glowTex, color: col, transparent: true, opacity: 0.35, depthWrite: false, blending: T.AdditiveBlending })); halo.scale.set(1.8, 1.8, 1); g.add(halo);
     const light = new T.PointLight(col, isMe ? 2.2 : 1.4, 6, 2); light.position.set(0, 0.4, 0); g.add(light);
     // trail ribbon
@@ -273,7 +276,7 @@ const WORLD = (() => {
     const trail = new T.Mesh(tg, new T.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide, toneMapped: false }));
     trail.frustumCulled = false; rl.grp.add(trail);
     const tag = isMe ? null : nameTag(`${rl.b.glyph} ${rl.b.name}`, rl.b.color); if (tag) rl.grp.add(tag);
-    return { rl, g, spin, extra: skin.extra, halo, light, trail, tag, hist: [], dead: false, roll: 0, x: laneX(rl.b.cl), isMe, shieldM, magnetM, dblM };
+    return { rl, g, spin, extra: skin.extra, halo, light, trail, tag, hist: [], dead: false, roll: 0, x: laneX(rl.b.cl), isMe, shieldM, magnetM, dblM, mark };
   }
   function makeDecor(root, sMax) {
     const grp = new T.Group(); root.add(grp);
@@ -306,45 +309,15 @@ const WORLD = (() => {
   const tmpV = { x: 0, y: 0, z: 0 };
   function updateHazards(t, s) {
     const items = race.items;
-    // items sorted by s0; everything inside [s − behind, s + ahead] is shown
+    // items sorted by s0; only the followed racer's rail shows hazards and pickups (rivals' would only clutter)
     while (race.lo < items.length && items[race.lo].s1 < s - VIEW_BEHIND) { items[race.lo].g.visible = false; race.lo++; }
     for (let k = race.lo; k < items.length; k++) {
       const it = items[k];
       if (it.s0 > s + VIEW_AHEAD) break;
-      if (it.s1 < s - VIEW_BEHIND) { it.g.visible = false; continue; }
-      // on the followed rail, anything already behind the sphere would sit between it and the camera: gone
-      if (it.rl === race.top && (it.h ? it.h.s1 : it.orb.s) < s - 0.4) { it.g.visible = false; continue; }
+      // anything already behind the sphere would sit between it and the camera: gone
+      if (it.rl !== race.top || (it.h ? it.h.s1 : it.orb.s) < s - 0.4) { it.g.visible = false; continue; }
       it.g.visible = true;
-      if (it.kind === 'orb') { const got = it.rl.b.got.includes(it.orb.id); it.g.visible = !got; it.m.rotation.y = t * 3; it.m.rotation.x = t * 1.3; continue; }
-      const h = it.h, P = it.parts, on = SIM0.hazardOn(h, t);
-      switch (h.kind) {
-        case 'mine': P.m.rotation.y = t * 2; P.m.rotation.x = t; P.m.scale.setScalar(1 + 0.12 * Math.sin(t * 9 + h.id)); break;
-        case 'laser': {
-          const charge = clamp(1 - (h.on - t) / 0.9, 0, 1), flick = 0.8 + 0.2 * Math.sin(t * 60 + h.id);
-          P.beam.visible = P.beam2.visible = on; P.beam.scale.y = 0.07 * flick; P.strip.visible = !on && charge > 0 && t < h.off;
-          P.strip.scale.z = 0.4 * charge; P.p1.material = P.p2.material = on || (charge > 0 && t < h.off) ? (it.mine ? M.hotSolid : M.otherSolid) : M.dim; break;
-        }
-        case 'echo': { P.solid.visible = on; P.ghost.visible = !on; const left = h.on - t; P.ring.visible = !on && left < 2.2 && left > 0; if (P.ring.visible) P.ring.scale.setScalar(0.5 + left * 0.9); break; }
-        case 'pillar': {
-          const left = h.on - t; P.col.position.y = 1.1 + (left > 0 ? Math.min(30, left * left * 60) : 0); P.col.visible = left < 0.7;
-          P.ring.visible = left > -0.1 && left < 2.0; if (P.ring.visible) P.ring.material.opacity = 0.35 + 0.35 * Math.abs(Math.sin(t * 10)); break;
-        }
-        case 'crusher': {
-          let f = (t - h.ph) / h.per; f -= Math.floor(f);
-          const y = f < h.duty ? 0.35 : f < h.duty + 0.2 ? 0.35 + 2.0 * smooth((f - h.duty) / 0.2) : 2.35 - 2.0 * Math.pow(clamp((f - 0.85) / 0.15, 0, 1), 3);
-          P.head.position.y = y; break;
-        }
-        case 'sweeper': {
-          if (!P.bar) break;
-          const k = clamp((t - (h.on - 0.14)) / 0.14, 0, 1); P.bar.position.x = P.from * (1 - smooth(k));
-          break;
-        }
-        case 'gate': case 'teeth': {
-          P.panel.visible = on; P.off.visible = !on; if (P.panel2) P.panel2.visible = on;
-          if (h.kind === 'teeth') { P.panel.rotation.z = t * 9; P.panel2.rotation.z = t * 9; }
-          break;
-        }
-      }
+      if (it.kind === 'orb') { const got = it.rl.b.got.includes(it.orb.id); it.g.visible = !got; it.m.rotation.y = t * 3; it.m.rotation.x = t * 1.3; }
     }
   }
   /**
@@ -373,6 +346,7 @@ const WORLD = (() => {
       for (const o of sp.extra.children) if (o.userData.orbit) o.rotation.z = now * o.userData.orbit;
       // orient the sphere's group along its rail so rolling looks right
       sp.g.quaternion.setFromRotationMatrix(_m().makeBasis(new T.Vector3(f.sx, f.sy, f.sz), new T.Vector3(f.ux, f.uy, f.uz), new T.Vector3(-f.tx, -f.ty, -f.tz).normalize()));
+      sp.mark.visible = v.i === view.follow && v.alive; if (sp.mark.visible) sp.mark.material.opacity = 0.55 + 0.2 * Math.sin(now * 6);
       sp.shieldM.visible = !!v.shield && v.alive; if (sp.shieldM.visible) { sp.shieldM.rotation.y = now * 1.5; sp.shieldM.rotation.x = now * 0.7; }
       if (v.shieldPop && !sp.popped) { sp.popped = true; const pf = railAt(sp.rl, ss, v.x, SPHERE_R); burst(pf, new T.Color(0x6fb7ff), false, 0.5, sp.rl); }
       if (!v.shieldPop) sp.popped = false;
@@ -413,6 +387,7 @@ const WORLD = (() => {
     camera.up.set(e.ux * 0.3, 0.7 + e.uy * 0.3, e.uz * 0.3);
     camera.lookAt(cam.look.x, cam.look.y, cam.look.z);
     camOther.position.copy(camera.position); camOther.quaternion.copy(camera.quaternion); camOther.fov = camera.fov; camOther.aspect = camera.aspect; camOther.updateProjectionMatrix();
+    guardLane(rl, sNow, followSp, now);
     W.key.position.set(cam.pos.x + 4, cam.pos.y + 10, cam.pos.z + 6); W.key.target.position.set(cam.look.x, cam.look.y, cam.look.z);
     // finale: the merge arena glows harder; chromatic theme drifts hue
     if (theme.shift) { const c = new T.Color().setHSL((now * 0.02) % 1, 0.7, 0.045, T.SRGBColorSpace); scene.fog.color.copy(c); scene.background.copy(c); }
@@ -421,6 +396,43 @@ const WORLD = (() => {
     render(dt);
   }
   const xAt = (H, s) => { for (const h of H) if (h[0] <= s) return h[1]; return H.length ? H[H.length - 1][1] : 0; };
+  // Keep your ball the only ball in your lane. Every frame, the stretch of your rail you can see (a little behind
+  // your ball to 80 u ahead, from the road up to just above the ball) is projected to the screen; any rival ball
+  // that would be drawn inside that shape, or close to its edge, isn't drawn (nor its trail and name). It comes back
+  // only after it has been clear for a moment, so nothing flickers in and out at the edge.
+  const PJ = { a: null, b: null };
+  function screenOf(p, out) { out.set(p.x, p.y, p.z).project(camera); return { x: (out.x + 1) * 0.5 * innerWidth, y: (1 - out.y) * 0.5 * innerHeight, z: out.z }; }
+  function guardLane(rl, sNow, followSp, now) {
+    if (!PJ.a) { PJ.a = new T.Vector3(); PJ.b = new T.Vector3(); }
+    camera.updateMatrixWorld();
+    const quads = [];
+    let prev = null;
+    for (let d = -3; d <= 80; d += d < 10 ? 1 : 2.5) {
+      const sr = sNow + d;
+      const L = screenOf(railAt(rl, sr, -RAIL_HALF - 0.1, 0), PJ.a), Rr = screenOf(railAt(rl, sr, RAIL_HALF + 0.1, 0), PJ.a);
+      const Lt = screenOf(railAt(rl, sr, -RAIL_HALF - 0.1, 1.2), PJ.a), Rt = screenOf(railAt(rl, sr, RAIL_HALF + 0.1, 1.2), PJ.a);
+      const cur = { L, R: Rr, Lt, Rt, ok: L.z < 1 && Rr.z < 1 && L.z > -1 };
+      if (prev && prev.ok && cur.ok) { quads.push([prev.L, prev.R, cur.R, cur.L]); quads.push([prev.Lt, prev.Rt, cur.Rt, cur.Lt]); quads.push([prev.L, prev.Lt, cur.Lt, cur.L]); quads.push([prev.R, prev.Rt, cur.Rt, cur.R]); }
+      prev = cur;
+    }
+    const inQuad = (p, q, m) => {
+      let pos = 0, neg = 0;
+      for (let i = 0; i < 4; i++) { const a = q[i], b = q[(i + 1) % 4], c = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x); if (c > 0) pos++; else if (c < 0) neg++; }
+      if (!pos || !neg) return true;
+      for (let i = 0; i < 4; i++) { const a = q[i], b = q[(i + 1) % 4], dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1, u = clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0, 1); if (Math.hypot(a.x + dx * u - p.x, a.y + dy * u - p.y) < m) return true; }
+      return false;
+    };
+    for (const sp of race.spheres) {
+      if (sp === followSp || sp.dead) continue;
+      const c = screenOf(sp.g.position, PJ.b);
+      // on-screen radius of the ball plus its glow, plus a safety margin
+      const edge = screenOf(sp.g.position.clone().addScaledVector(camera.up, SPHERE_R * 1.3), PJ.a), rpx = Math.hypot(edge.x - c.x, edge.y - c.y) + 4;
+      const hit = c.z > -1 && c.z < 1 && quads.some((q) => inQuad(c, q, rpx));
+      if (hit) sp.clearAt = now + 0.35;
+      const show = !(sp.clearAt > now);
+      sp.g.visible = show; sp.trail.visible = show; if (sp.tag) sp.tag.visible = show && sp.tag.visible;
+    }
+  }
   function writeTrail(sp, win, s, alive) {
     const pa = sp.trail.geometry.attributes.position, ca = sp.trail.geometry.attributes.color, H = sp.hist, N = 18, col = sp.rl.color, len = win ? 5 : 3.2;
     for (let k = 0; k < N; k++) {

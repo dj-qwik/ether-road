@@ -1,7 +1,7 @@
 // ───────────────────────── TEST LAB (owner's debug menu) ─────────────────────────
 // Unlock once by opening the site with #lab (or #debug) in the address; it's remembered on that browser only.
 // Everything here is local practice: it never talks to the server and can't touch a paid race.
-//   Track · theme · seed · start time · speed · racers · computer level · one hazard kind · invincible · autopilot
+//   Track · theme · seed · start time · speed · racers · computer level · invincible · autopilot
 //   In a lab race: R restart same seed · N new seed · T next track · J skip 5 s · F speed · G invincible · P autopilot · Esc lab
 const LAB = (() => {
   if (/#(lab|debug)/.test(location.hash)) store.set('er_lab', '1');
@@ -9,7 +9,7 @@ const LAB = (() => {
   const S = { track: 'random', theme: 'track', seed: '', start: 0, speed: 1, n: 4, bots: 'normal', kind: 'all', god: true, auto: false };
   try { Object.assign(S, JSON.parse(store.get('er_lab_cfg') || '{}')); } catch {}
   const save = () => store.set('er_lab_cfg', JSON.stringify(S));
-  const TRACK_KEYS = () => Object.keys(SIM0.TRACKS), KINDS = ['spike', 'mine', 'wall', 'laser', 'echo', 'pillar', 'gate', 'teeth', 'crusher', 'sweeper'];
+  const TRACK_KEYS = () => Object.keys(SIM0.TRACKS);
   const seg = (name, opts, cur) => `<div class="seg">${opts.map(([v, l]) => `<button class="${String(v) === String(cur) ? 'sel' : ''}" data-lab="${name}" data-v="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
   const field = (label, html) => `<div style="display:grid;gap:6px"><span class="label">${label}</span>${html}</div>`;
   function card() {
@@ -23,7 +23,6 @@ const LAB = (() => {
         ${field('Speed', seg('speed', [0.25, 0.5, 1, 2, 4].map((v) => [v, v + '×']), S.speed))}
         ${field('Racers', seg('n', [1, 2, 3, 4].map((v) => [v, v === 1 ? 'Solo' : v]), S.n))}
         ${field('Computer players', seg('bots', [['easy', 'Easy'], ['normal', 'Normal'], ['hard', 'Sharp'], ['flawless', 'Flawless']], S.bots))}
-        ${field('Hazards', seg('kind', [['all', 'All'], ...KINDS.map((k) => [k, k[0].toUpperCase() + k.slice(1)])], S.kind))}
         ${field('You', seg('god', [[true, 'Invincible'], [false, 'Can crash']], S.god) + seg('auto', [[false, 'You drive'], [true, 'Autopilot']], S.auto))}
       </div>
       <label style="display:grid;gap:6px"><span class="label">Seed (blank = new road every time)</span><input id="labSeed" class="field" inputmode="numeric" placeholder="random" value="${esc(S.seed)}"></label>
@@ -35,7 +34,7 @@ const LAB = (() => {
     const key = S.track === 'random' ? TRACK_KEYS()[Math.floor(Math.random() * TRACK_KEYS().length)] : S.track;
     const seed = sameSeed && game.lab ? game.lab.seed : S.seed !== '' && /^\d+$/.test(S.seed) ? +S.seed >>> 0 : (Math.random() * 4294967296) >>> 0;
     const players = practicePlayers(S.n, BOT_LEVELS[S.bots]);
-    localRace(players, 0, 'practice', { key, seed, theme: S.theme === 'track' ? null : S.theme, debug: { god: S.god ? [0] : [], kinds: S.kind === 'all' ? null : [S.kind] } });
+    localRace(players, 0, 'practice', { key, seed, theme: S.theme === 'track' ? null : S.theme, debug: { god: S.god ? [0] : [] } });
     game.lab = { seed, key, auto: S.auto };
     game.speed = S.speed; game.screen = 'match'; document.body.classList.add('playing'); $('#hud').hidden = false;
     showOverlay(''); callout('');

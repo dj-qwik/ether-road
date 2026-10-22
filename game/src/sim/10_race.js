@@ -23,38 +23,23 @@ function hazardLive(h, m) {
   return false;
 }
 
-// How hard each moment is (seconds): gap between hazard beats, smallest switch window, chance a beat flips lanes.
-const GAP = [[2.6, 1.0], [14, 0.74], [30, 0.52], [45, 0.4], [52, 0.32], [60, 0.24]];
-const WMIN = [[2.6, 0.42], [14, 0.3], [30, 0.2], [45, 0.14], [52, 0.1], [60, 0.055]];
-const FLIP = [[0, 0.5], [14, 0.55], [30, 0.62], [45, 0.78], [60, 0.92]];
+// How hard each moment is (seconds): gap between hazards, smallest switch window, chance a hazard flips lanes.
+const GAP = [[2.6, 0.9], [12, 0.62], [26, 0.46], [40, 0.36], [50, 0.29], [60, 0.23]];
+const WMIN = [[2.6, 0.4], [12, 0.26], [24, 0.17], [36, 0.13], [46, 0.1], [52, 0.085], [60, 0.05]];
+const FLIP = [[0, 0.6], [14, 0.68], [30, 0.74], [45, 0.84], [60, 0.94]]; // lots of back and forth
 // The switch window a flip is tightened to (seconds; ×0.85–1.5): this is where precision starts to matter.
-const WTARGET = [[2.6, 0.65], [14, 0.45], [30, 0.28], [45, 0.18], [52, 0.115], [57, 0.08], [60, 0.06]];
-const TIGHTEN = [[2.6, 0.3], [20, 0.5], [45, 0.8], [52, 1]];
+const WTARGET = [[2.6, 0.55], [12, 0.32], [24, 0.2], [36, 0.15], [46, 0.12], [52, 0.095], [57, 0.072], [60, 0.055]];
+const TIGHTEN = [[2.6, 0.4], [12, 0.75], [30, 0.9], [44, 1]];
 const COLLAPSE_AT = 48; // "FINAL COLLAPSE": the road tightens until someone breaks
-// Hazard kinds. len: depth along the road. Static kinds block always; timed kinds switch on/off; beat kinds cycle.
-const KIND = {
-  spike: { len: 1.0 }, mine: { len: 0.55 }, wall: { len: 1.0 }, laser: { len: 0.35, timed: 1 }, echo: { len: 1.1, timed: 1 },
-  pillar: { len: 0.9, timed: 1 }, gate: { len: 0.5, beat: 1 }, teeth: { len: 0.6, beat: 1 }, crusher: { len: 0.8, beat: 1 },
-  sweeper: { len: 0.45, timed: 1 }, // a bar that slides across into your lane just before you arrive
-};
+// ONE hazard: red spikes. If it's red, it's solid, always. A long stretch is just a longer row of spikes.
+const KIND = { spike: { len: 1.0 } };
 // Power-ups. Each sits at the same track position for every racer (mirrored lane, like every hazard), in the
 // risky lane between two hazards, so taking it costs two quick taps. Effects are fixed, never random:
-//   shield  — the next solid hazard you touch is passed through instead (one hit, then gone)
+//   shield  — the next spikes you touch are passed through instead (one hit, then gone)
 //   magnet  — for 4 s, orbs in BOTH lanes are yours
 //   double  — for 6 s, orbs count twice
 const POWERS = { shield: { ticks: 0 }, magnet: { ticks: 240 }, double: { ticks: 360 } };
 const POWER_PLAN = [[11, 'magnet'], [24, 'shield'], [33, 'double'], [42, 'magnet']];
-// Which kinds can appear when (introduced one at a time, then each track's own mix).
-function kindPool(t, track, kinds) {
-  if (kinds && kinds.length) return kinds; // debug: one kind only
-  if (t < 6) return ['spike'];
-  if (t < 9) return ['mine', 'spike'];
-  if (t < 12) return ['laser', 'spike', 'mine'];
-  if (t < 15.5) return ['echo', 'pillar', 'spike', 'mine'];
-  if (t < 20) return ['gate', 'spike', 'mine', 'laser', 'pillar', 'sweeper'];
-  if (t >= COLLAPSE_AT) return ['wall', 'wall', 'spike', 'gate', 'crusher', 'laser'];
-  return track.mix;
-}
 
 /**
  * Build a course from a seed string. Pure function of the seed: the server and every browser build the same one.
@@ -65,81 +50,47 @@ function buildCourse(seed, trackKey, opts = {}) {
   const track = TRACKS[trackKey] || TRACKS.nebula;
   const rng = makeRng('course:' + track.key + ':' + seed), r = () => rng();
   const plan = POWER_PLAN.slice(); let pid = 0;
-  const pick = (a) => a[Math.floor(r() * a.length)];
   const blocks = [], orbs = [];
   let id = 0, prevB = -1, prevEnd = -1e9, prevBlock = null, t = 2.6, first = true;
-  const occ = (len) => (len + 2 * SPHERE_R); // road length a hazard + the sphere cover
+  const occ = (len) => (len + 2 * SPHERE_R); // road length a block + the sphere cover
+  const mk = (lane, s0, s1) => { const h = { id: id++, kind: 'spike', lane, s0, s1, tA: tOfS(s0 - SPHERE_R), tB: tOfS(s1 + SPHERE_R), on: -1e9, off: 1e9, per: 0, ph: 0, duty: 0, decoy: false }; blocks.push(h); return h; };
   while (t < RACE_SECONDS + 1.2) {
     const v = speedAt(t);
-    const B = prevB < 0 ? (r() < 0.5 ? 0 : 1) : r() < pwl(FLIP, t) ? 1 - prevB : prevB;
-    let kind = pick(kindPool(t, track, opts.kinds));
-    // a decoy on the SAFE lane: looks dangerous but is not solid while you pass (reading is a skill)
-    let decoy = t > 20 && !opts.kinds && !KIND[kind].beat && kind !== 'sweeper' && r() < pwl([[20, 0.12], [40, 0.28], [60, 0.32]], t) * track.decoys ? pick(['laser', 'echo', 'pillar', 'crusher']) : null;
-    const wantSnap = KIND[kind].beat || decoy === 'crusher';
-    // where the hazard's middle is passed, snapped onto the beat for beat-driven kinds
-    let tm = t + occ(KIND[kind].len) / 2 / v;
-    if (wantSnap) {
-      const frac = kind === 'crusher' ? 0.225 : decoy === 'crusher' && !KIND[kind].beat ? 0.725 : 0.5;
-      const j = Math.floor(tm / BEAT); let target = (j + frac) * BEAT; if (target < tm) target += BEAT;
-      tm = target;
-    }
-    let s0 = sAtT(tm) - occ(KIND[kind].len) / 2 + SPHERE_R, s1 = s0 + KIND[kind].len;
-    // a lane flip needs a window to switch in: push the hazard back until there is one
+    // a power-up is due: hold the lane and leave a gap long enough to dip into the other lane for it
+    const powerDue = !first && plan.length && t >= plan[0][0];
+    const B = prevB < 0 ? (r() < 0.5 ? 0 : 1) : powerDue ? prevB : r() < pwl(FLIP, t) ? 1 - prevB : prevB;
+    let tm = t + occ(1) / 2 / v;
+    if (powerDue) tm = Math.max(tm, tOfS(prevEnd + 2 * SPHERE_R + 0.62 * v) + occ(1) / 2 / v);
+    let s0 = sAtT(tm) - occ(1) / 2 + SPHERE_R, s1 = s0 + 1;
+    // a lane flip needs a window to switch in: push the spikes back until there is one
     if (prevB >= 0 && B !== prevB) {
       const need = pwl(WMIN, tm) * speedAt(tm), have = s0 - prevEnd - 2 * SPHERE_R;
-      if (have < need) {
-        if (wantSnap) { kind = 'spike'; decoy = decoy === 'crusher' ? null : decoy; }
-        s0 += need - have; s1 = s0 + KIND[kind].len;
-      } else if (r() < pwl(TIGHTEN, tm)) {
-        // tighten: the previous lane stays closed until just before this hazard, leaving a narrow window
+      if (have < need) { s0 += need - have; s1 = s0 + 1; }
+      else if (r() < pwl(TIGHTEN, tm)) {
+        // tighten: the previous lane's spikes run on until just before these, leaving a narrow window
         const w = Math.max(need, pwl(WTARGET, tm) * (0.85 + 0.65 * r()) * speedAt(tm)), end = s0 - 2 * SPHERE_R - w;
-        if (end > prevEnd + 0.6) {
-          if (prevBlock && !KIND[prevBlock.kind].timed && !KIND[prevBlock.kind].beat && prevBlock.s1 >= prevEnd - 1e-9) {
-            prevBlock.s1 = end; prevBlock.tB = tOfS(end + SPHERE_R); if (prevBlock.s1 - prevBlock.s0 > 2) prevBlock.kind = 'wall';
-          } else if (end - prevEnd - 0.4 >= 1) {
-            const fs0 = prevEnd + 0.4;
-            blocks.push({ id: id++, kind: 'wall', lane: prevB, s0: fs0, s1: end, tA: tOfS(fs0 - SPHERE_R), tB: tOfS(end + SPHERE_R), on: -1e9, off: 1e9, per: 0, ph: 0, duty: 0, decoy: false });
-          }
-          prevEnd = Math.max(prevEnd, end);
+        if (end > prevEnd + 0.6 && prevBlock && prevBlock.s1 >= prevEnd - 1e-9) {
+          prevBlock.s1 = end; prevBlock.tB = tOfS(end + SPHERE_R);
+          prevEnd = end;
         }
       }
     }
-    const tA = tOfS(s0 - SPHERE_R), tB = tOfS(s1 + SPHERE_R);
-    // merge a run on the same lane into one long wall now and then (the canonical path never needed that gap)
-    if (!first && B === prevB && prevBlock && prevBlock.s1 - prevBlock.s0 < 24 && !KIND[kind].timed && !KIND[kind].beat && !KIND[prevBlock.kind].timed && !KIND[prevBlock.kind].beat && r() < 0.3 && !decoy) {
-      prevBlock.kind = 'wall'; prevBlock.s1 = s1; prevBlock.tB = tB; prevEnd = s1;
+    // run spikes on the same lane together into one long row now and then
+    if (!first && !powerDue && B === prevB && prevBlock && prevBlock.s1 - prevBlock.s0 < 24 && r() < track.walls) {
+      prevBlock.s1 = s1; prevBlock.tB = tOfS(s1 + SPHERE_R); prevEnd = s1;
       t = tm + pwl(GAP, tm) * (0.9 + 0.22 * r());
       continue;
     }
-    const mk = (k, lane, extra) => { const h = { id: id++, kind: k, lane, s0, s1, tA, tB, on: -1e9, off: 1e9, per: 0, ph: 0, duty: 0, decoy: false, ...extra }; blocks.push(h); return h; };
-    let main;
-    if (kind === 'laser') main = mk(kind, B, { on: tA - 0.55, off: tB + 0.3 });
-    else if (kind === 'echo') main = mk(kind, B, { on: tA - 0.5 });
-    else if (kind === 'pillar') main = mk(kind, B, { on: tA - 0.65 });
-    else if (kind === 'crusher') main = mk(kind, B, { per: BEAT, ph: 0, duty: 0.45 });
-    else if (kind === 'sweeper') { main = mk(kind, B, { on: tA - 0.38 }); mk(kind, 1 - B, { off: tA - 0.43, decoy: true }); }
-    else if (kind === 'gate' || kind === 'teeth') {
-      const j = Math.floor(tm / BEAT);
-      main = mk(kind, B, { per: 2 * BEAT, ph: j * BEAT, duty: 0.5 });
-      mk(kind, 1 - B, { per: 2 * BEAT, ph: (j + 1) * BEAT, duty: 0.5, decoy: true });
-    } else main = mk(kind, B);
-    if (decoy) {
-      const L = 1 - B;
-      if (decoy === 'laser') mk('laser', L, { decoy: true, on: tA - 1.1, off: tA - 0.32 });
-      else if (decoy === 'echo') mk('echo', L, { decoy: true, on: tB + 0.32 });
-      else if (decoy === 'pillar') mk('pillar', L, { decoy: true, on: tB + 0.3 });
-      else mk('crusher', L, { decoy: true, per: BEAT, ph: 0, duty: 0.45 });
-    }
+    const main = mk(B, s0, s1);
     // an orb in the blocked lane's gap: grab it with two quick taps, or play safe. Breaks ties at the cap.
     // power-ups use the same kind of spot, at fixed times in the race (the first good gap after each planned time)
     if (!first && B === prevB && prevBlock && t > 5) {
       const gapS = s0 - prevEnd - 2 * SPHERE_R;
       if (gapS / v > 0.5) {
-        if (plan.length && t >= plan[0][0] && t < plan[0][0] + 7) orbs.push({ id: orbs.length, lane: B, s: (prevEnd + s0) / 2, power: plan.shift()[1], pid: pid++ });
+        if (powerDue) orbs.push({ id: orbs.length, lane: B, s: (prevEnd + s0) / 2, power: plan.shift()[1], pid: pid++ });
         else if (r() < 0.45) orbs.push({ id: orbs.length, lane: B, s: (prevEnd + s0) / 2, power: null });
       }
     }
-    while (plan.length && t > plan[0][0] + 7) plan.shift(); // no fitting gap in time: that power-up is skipped (for everyone)
     prevB = B; prevEnd = Math.max(prevEnd, s1); prevBlock = main; first = false;
     t = tm + pwl(GAP, tm) * (0.9 + 0.22 * r());
   }
@@ -195,7 +146,7 @@ function threatOn(course, b, lane, s, ahead, from, fooled) {
 
 /**
  * cfg: { key (track), seed, players: [{ i, name, human?, skill?, skin? }], active: [i, …], botSalt?, debug? }
- *  debug (practice only; the server never sets it): { god: [seat…] never crash, kinds: [kind…] only these hazards }
+ *  debug (practice only; the server never sets it): { god: [seat…] never crash }
  * rng (anti-peeking, same contract as before): server { record: [] } logs every draw; browsers { feed } replay them.
  * The course needs only three draws, all taken here at the start.
  */
@@ -391,21 +342,15 @@ function pilotSurvives(course) {
 }
 
 // The six tracks (the "arenas" of this game). Keys are stage ids in the on-chain evidence: APPEND ONLY.
-// A track sets the hazard mix after the opening, how the four rails braid, and its look. The difficulty
+// A track sets how the four rails braid, its look, and how often spikes run together into long rows. The difficulty
 // schedule (gaps, switch windows, final collapse) is the same on every track, and inside a race every racer
 // has the same road (mirrored), so the track drawn never favours anyone.
 const TRACKS = {
-  nebula: { key: 'nebula', name: 'Nebula Run', sub: 'Long sweeping curves. A bit of everything.', theme: 'void', decoys: 1,
-    mix: ['spike', 'spike', 'mine', 'mine', 'laser', 'echo', 'pillar', 'gate', 'teeth', 'crusher', 'sweeper'], layout: ['solo', 'parallel', 'cross', 'solo', 'helix', 'merge'] },
-  helix: { key: 'helix', name: 'Ion Helix', sub: 'Rails corkscrew round each other. Everything moves on the beat.', theme: 'ion', decoys: 0.8,
-    mix: ['spike', 'spike', 'spike', 'mine', 'mine', 'gate', 'teeth', 'crusher', 'laser'], layout: ['helix', 'parallel', 'helix', 'cross', 'helix', 'merge'] },
-  canyon: { key: 'canyon', name: 'Solar Canyon', sub: 'Hard switchbacks between walls and falling pillars.', theme: 'solar', decoys: 0.9,
-    mix: ['spike', 'spike', 'wall', 'pillar', 'pillar', 'mine', 'crusher', 'sweeper'], layout: ['solo', 'cross', 'solo', 'parallel', 'cross', 'merge'] },
-  cathedral: { key: 'cathedral', name: 'Prism Cathedral', sub: 'Climbs and drops past glass. Half of what you see is not solid.', theme: 'prism', decoys: 1.45,
-    mix: ['spike', 'mine', 'echo', 'echo', 'pillar', 'laser', 'gate', 'sweeper'], layout: ['parallel', 'solo', 'merge', 'helix', 'solo', 'cross'] },
-  storm: { key: 'storm', name: 'Vector Storm', sub: 'Rails flung far apart, then slammed together.', theme: 'vector', decoys: 1,
-    mix: ['spike', 'mine', 'mine', 'laser', 'laser', 'sweeper', 'sweeper', 'teeth'], layout: ['solo', 'solo', 'merge', 'solo', 'cross', 'parallel'] },
-  ghost: { key: 'ghost', name: 'Signal Ghost', sub: 'Braids and crossings. Echoes everywhere.', theme: 'signal', decoys: 1.25,
-    mix: ['spike', 'echo', 'echo', 'sweeper', 'crusher', 'crusher', 'gate', 'mine'], layout: ['cross', 'parallel', 'cross', 'helix', 'cross', 'merge'] },
+  nebula: { key: 'nebula',  name: 'Nebula Run', sub: 'Long sweeping curves.', theme: 'void', walls: 0.3, layout: ['solo', 'parallel', 'cross', 'solo', 'helix', 'merge'] },
+  helix: { key: 'helix',  name: 'Ion Helix', sub: 'Rails corkscrew round each other.', theme: 'ion', walls: 0.22, layout: ['helix', 'parallel', 'helix', 'cross', 'helix', 'merge'] },
+  canyon: { key: 'canyon',  name: 'Solar Canyon', sub: 'Switchbacks between long rows of spikes.', theme: 'solar', walls: 0.42, layout: ['solo', 'cross', 'solo', 'parallel', 'cross', 'merge'] },
+  cathedral: { key: 'cathedral',  name: 'Prism Cathedral', sub: 'Climbs and drops past glass towers.', theme: 'prism', walls: 0.3, layout: ['parallel', 'solo', 'merge', 'helix', 'solo', 'cross'] },
+  storm: { key: 'storm',  name: 'Vector Storm', sub: 'Rails flung far apart, then slammed together.', theme: 'vector', walls: 0.25, layout: ['solo', 'solo', 'merge', 'solo', 'cross', 'parallel'] },
+  ghost: { key: 'ghost',  name: 'Signal Ghost', sub: 'Braids and crossings.', theme: 'signal', walls: 0.36, layout: ['cross', 'parallel', 'cross', 'helix', 'cross', 'merge'] },
 };
 const ARENAS = TRACKS;

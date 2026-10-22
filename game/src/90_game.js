@@ -93,7 +93,7 @@ function practiceCard() {
     <div class="row"><button class="btn primary big" id="practiceGo">Start</button><button class="btn ghost" id="back">Back</button></div>
   </div>`;
 }
-const HOWTO = ['Your sphere rolls forward on its own. Tap to switch lanes.', 'Red is solid. Faint outlines are not solid yet: read the timers.', 'Power-ups sit in the risky lane: a shield, an orb magnet, double orbs.', 'Gold orbs break ties at the 60 s cap.'];
+const HOWTO = ['Your ball rolls forward on its own. Tap to switch lanes.', 'Red spikes are the only danger. Touch them and you are out.', 'Power-ups sit in the risky lane: a shield, an orb magnet, double orbs.', 'Gold orbs break ties at the 60 s cap.'];
 function introCard(seconds, online) {
   const A = SIM0.ARENAS[game.key] || SIM0.ARENAS.void;
   return `<div class="card intro">
