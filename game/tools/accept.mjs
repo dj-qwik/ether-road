@@ -1,7 +1,7 @@
 // Acceptance suite for the race rules. Usage: node tools/accept.mjs [--quick]
 //   LENGTH    every race ends by the 60 s cap with exactly one winner, no exceptions (2, 3, 4 players)
 //   SOLVABLE  every course is finished by a flawless driver along its safe line
-//   FAIR      identical drivers: no seat wins significantly more (chi-square, p > 0.01)
+//   FAIR      identical drivers: no seat wins significantly more (chi-square over 4N races, p > 0.001)
 //   EXPLOIT   lazy play (idle, holding a direction, wiggling, random presses, spamming Use) never beats good players
 //   SKILL     players who react faster win more: 150 ms > 220 ms > 300 ms > 400 ms
 //   PICKUPS   random caches of 2–3 items (take one, the rest vanish for you) + 2 boost/2 slow strips, same spots for everyone, never under spikes
@@ -46,10 +46,12 @@ if (atCap > 0.4) fails.push(`PACING ${pct(atCap)} of races reach the 60 s cap`)
 // FAIR: four identical drivers
 {
   const wins = [0, 0, 0, 0]
-  for (let k = 0; k < N * 2; k++) wins[runRace(G, good()).winner.i]++
-  const e = (N * 2) / 4, chi = wins.reduce((a, w) => a + (w - e) ** 2 / e, 0)
+  // 4N races; fails at p < 0.001 (chi² > 16.27, 3 dof): a fair game trips it once in a thousand runs, a real seat
+  // edge of ~5 points still trips it most of the time
+  for (let k = 0; k < N * 4; k++) wins[runRace(G, good()).winner.i]++
+  const e = (N * 4) / 4, chi = wins.reduce((a, w) => a + (w - e) ** 2 / e, 0)
   console.log(`FAIR seat wins ${wins.join('/')} (chi² ${chi.toFixed(1)})`)
-  if (chi > 11.34) fails.push(`FAIR seat wins ${wins.join('/')}`)
+  if (chi > 16.27) fails.push(`FAIR seat wins ${wins.join('/')}`)
 }
 
 // EXPLOIT: seat 0 plays lazily against three good players
