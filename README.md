@@ -61,10 +61,10 @@ ITEMS cannon, burst, EMP, ether boost all used and landing; ether boost: 30/30 n
 ## Soundtrack
 
 Four songs in `game/assets/music`: **Carnage Protocol**, **Crusher**, **GAME OVER**, **High Voltage**. Menus play them
-back to back. Each race gets one (dealt from a shuffled deck), as a 66 s race cut that starts 3 s before the song's
-high-energy section so it lands on GO. The neon pipes and the bloom pulse to the bass and drums of whatever is
+back to back. Each race gets one (dealt from a shuffled deck), as a 66 s race cut of the song's most energetic minute (no intros: Carnage Protocol from 1:05, Crusher
+from 2:33, GAME OVER from 2:37, High Voltage from 2:56), starting 3 s early so the section kicks in on GO. The neon pipes and the bloom pulse to the bass and drums of whatever is
 playing (a Web Audio analyser; it listens before the mute, so the pulse works with the sound off). The race cuts
-are made with ffmpeg from the originals (`-ss <drop − 3> -t 66`, fade out over the last 4 s, 160 kbps; full songs at
+are made with ffmpeg from the originals (`-ss <kick-in − 3> -t 66`, fade out over the last 4 s, 160 kbps; full songs at
 128 kbps).
 
 ## Practice, test lab, controllers, skins
