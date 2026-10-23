@@ -23,7 +23,7 @@ const isTouch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse
 // Touch: tap the left or right half of the screen to step, the USE button to use. Controller: d-pad, left stick or
 // bumpers step; ✕ (PlayStation) / A (Xbox) uses. Each action is time-stamped when pressed; the race reads them in order.
 const INPUT = { acts: [], enabled: false, hold: { L: 0, R: 0 }, rep: { L: 0, R: 0 } };
-const HOLD_DELAY = 170, HOLD_EVERY = 67; // ms: hold a direction and the ball keeps stepping, one position per 67 ms
+const HOLD_DELAY = 110, HOLD_EVERY = 67; // ms: hold a direction 110 ms and the ball keeps stepping, one position per 67 ms
 function actNow(a) { if (INPUT.enabled) INPUT.acts.push([performance.now(), a]); }
 function holdStart(d) { if (!INPUT.hold[d]) { INPUT.hold[d] = performance.now(); INPUT.rep[d] = INPUT.hold[d] + HOLD_DELAY; actNow(d); } }
 function holdEnd(d) { INPUT.hold[d] = 0; }

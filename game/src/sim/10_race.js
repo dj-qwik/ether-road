@@ -61,8 +61,8 @@ function cachePlan(r) {
 }
 
 // ───── course difficulty (seconds) ─────
-const GAPT = [[2.6, 1.25], [12, 0.88], [25, 0.66], [38, 0.52], [48, 0.41], [53, 0.32], [57, 0.27], [60, 0.23]]; // time between spike patterns
-const WIDTH = [[2.6, 8], [10, 6], [20, 4.4], [32, 3.3], [42, 2.8], [48, 2.3], [51, 1.6], [54, 1], [60, 1]];     // opening width (positions)
+const GAPT = [[2.6, 1.3], [12, 1.0], [25, 0.8], [32, 0.66], [38, 0.52], [48, 0.39], [53, 0.3], [57, 0.25], [60, 0.22]]; // time between spike patterns
+const WIDTH = [[2.6, 8], [10, 7], [20, 5.6], [30, 4.4], [38, 3.1], [44, 2.5], [48, 2], [51, 1.4], [54, 1], [60, 1]];     // opening width (positions)
 const COLLAPSE_AT = 48; // "FINAL COLLAPSE": the pipe tightens until someone breaks
 const REACT = 0.1, STEP_SEC = STEP_TICKS * DT; // openings ahead are visible well in advance: planning absorbs most of the reaction time
 const maxShift = (dt, tt = 0) => clamp(Math.floor((dt * (tt >= COLLAPSE_AT ? 0.97 : 0.88) - (tt >= COLLAPSE_AT ? 0.05 : REACT)) / STEP_SEC), 0, SEGS / 2);
@@ -77,7 +77,7 @@ const KIND = { spike: { len: 0.8 } };
 //           roll straight over it, or dodge round it if you don't trust it
 //   live  — the plate covers where you are and is live the whole time you pass: get off it
 // Racers off the game's pace (a strip, a burst or EMP hit, ether boost) meet it in a different state: read the pulse.
-const ZAP = { period: 4 * BEAT, on: 0.5, warn: 0.3, len: [3.5, 6.5], width: [6, 10] };
+const ZAP = { period: 4 * BEAT, on: 0.5, warn: 0.3, len: [3, 5.5], width: [4, 6], widthLate: [5, 8] }; // a plate never covers more than half the pipe
 const zapPhase = (g, tick) => { const P = ZAP.period, x = (tick * DT - g.ph) % P; return x < 0 ? x + P : x; };
 /** is plate g live on this tick? (spike groups are always "live") */
 function zapOn(g, tick) { return g.ph == null || zapPhase(g, tick) < ZAP.period * ZAP.on; }
@@ -112,7 +112,7 @@ function buildCourse(seed, trackKey) {
     let zap = null;
     if (kind === 'zap') {
       // plate width and length; live plates sit on where you are and push you off to a spot you can reach in time
-      const wz = clamp(Math.round(lerp(ZAP.width[0], ZAP.width[1], r())), ZAP.width[0], ZAP.width[1]), L = lerp(ZAP.len[0], ZAP.len[1], r()), live = r() < 0.5;
+      const WZ = t < 30 ? ZAP.width : ZAP.widthLate, wz = clamp(Math.round(lerp(WZ[0], WZ[1], r())), WZ[0], WZ[1]), L = lerp(ZAP.len[0], ZAP.len[1], r()), live = r() < 0.5;
       if (live) {
         const dir = r() < 0.5 ? -1 : 1, dist = ((wz - 1) >> 1) + 1 + (wz % 2 ? 0 : dir > 0 ? 1 : 0) + Math.floor(r() * 2);
         nextC = segWrap(c + dir * dist);
@@ -158,9 +158,11 @@ function buildCourse(seed, trackKey) {
       c = nextC; t = tm + zap.L / v;
     } else if (kind === 'spiral') {
       // a long sleeve of spikes with a twisting channel to follow
-      const late = clamp((t - 20) / 30, 0, 1), tau = (0.9 + r() * 0.9) * (1 - 0.4 * late), L = v * tau, n = Math.max(3, Math.round(L / 1.0)), len = L / n;
-      const turns = (r() < 0.5 ? -1 : 1) * Math.max(2, Math.round(tau * (3 + 2.5 * late + r() * 3.5)));
-      const ww = clamp(w + 1, 3, 8); // a twisting channel narrower than 3 can't be followed: difficulty comes from the twist rate
+      // the channel twists at 2–4 positions a second in the first half, up to ~8 late on (you can step 15 a second);
+      // it's never narrower than 4 positions before 30 s, nor 3 after (narrower than 3 can't be followed)
+      const late = clamp((t - 30) / 22, 0, 1), tau = (0.9 + r() * 0.8) * (1 - 0.35 * late), L = v * tau, n = Math.max(3, Math.round(L / 1.0)), len = L / n;
+      const turns = (r() < 0.5 ? -1 : 1) * Math.max(2, Math.round(tau * (2 + 3 * late + r() * (2 + 1.5 * late))));
+      const ww = clamp(w + (t < 30 ? 2 : 1), t < 30 ? 4 : 3, 8);
       for (let k = 0; k < n; k++) {
         const ck = segWrap(nextC + Math.round(turns * k / (n - 1)));
         group('spiral', s0 + k * len, s0 + (k + 1) * len, gapMask(ck, ww));

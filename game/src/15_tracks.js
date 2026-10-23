@@ -90,7 +90,17 @@ const RAILGEO = (() => {
         const l = Math.hypot(ox, oy) || 1, cx = n < 2 ? 0 : ox / l, cy = n < 2 ? 1 : oy / l;
         out[k * 3] = f.sx * cx + f.ux * cy; out[k * 3 + 1] = f.sy * cx + f.uy * cy; out[k * 3 + 2] = f.sz * cx + f.uz * cy;
       }
-      raw.push({ p, out, bump: 0 });
+      // where the pipes rotate round each other the outward direction turns fast, and a swell riding it would turn
+      // the pipe sharply: swells fade out there (calm = 1 on straight stretches, small while rotating; smoothed)
+      const K = 16, calm0 = new Float64Array(NR), calm = new Float64Array(NR);
+      for (let k = 0; k < NR; k++) {
+        const a = Math.max(0, k - K) * 3, b = Math.min(NR - 1, k + K) * 3;
+        const rot = Math.acos(clamp(out[a] * out[b] + out[a + 1] * out[b + 1] + out[a + 2] * out[b + 2], -1, 1));
+        calm0[k] = 1 / (1 + (rot / 0.06) * (rot / 0.06));
+      }
+      const W = 60; let acc = 0;
+      for (let k = 0; k < NR + W; k++) { if (k < NR) acc += calm0[k]; if (k - 2 * W - 1 >= 0) acc -= calm0[k - 2 * W - 1]; const c = k - W; if (c >= 0 && c < NR) calm[c] = acc / (Math.min(NR - 1, k) - Math.max(0, k - 2 * W) + 1); }
+      raw.push({ p, out, calm, bump: 0 });
     }
     // 2) equal length over the whole race: each shorter pipe gets long, low swells (one every ~240 u) outward from
     //    the spine, sized by bisection. Long swells keep the ride smooth: no tight wiggles for the camera to follow.
@@ -98,7 +108,7 @@ const RAILGEO = (() => {
     const lenOf = (r, A, waves) => {
       let L = 0, px = 0, py = 0, pz = 0;
       for (let k = 0; k < NR; k++) {
-        const h = A ? bulge(A, waves, k / (NR - 1)) : 0;
+        const h = A ? bulge(A, waves, k / (NR - 1)) * r.calm[k] : 0;
         const x = r.p[k * 3] + r.out[k * 3] * h, y = r.p[k * 3 + 1] + r.out[k * 3 + 1] * h, z = r.p[k * 3 + 2] + r.out[k * 3 + 2] * h;
         if (k) L += Math.hypot(x - px, y - py, z - pz);
         px = x; py = y; pz = z;
@@ -122,7 +132,7 @@ const RAILGEO = (() => {
     return raw.map((r) => {
       const q = new Float64Array(NR * 3), acc = new Float64Array(NR);
       for (let k = 0; k < NR; k++) {
-        const h = r.A ? bulge(r.A, r.waves, k / (NR - 1)) : 0;
+        const h = r.A ? bulge(r.A, r.waves, k / (NR - 1)) * r.calm[k] : 0;
         for (let d = 0; d < 3; d++) q[k * 3 + d] = r.p[k * 3 + d] + r.out[k * 3 + d] * h;
         if (k) acc[k] = acc[k - 1] + Math.hypot(q[k * 3] - q[(k - 1) * 3], q[k * 3 + 1] - q[(k - 1) * 3 + 1], q[k * 3 + 2] - q[(k - 1) * 3 + 2]);
       }

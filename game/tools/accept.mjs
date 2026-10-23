@@ -8,7 +8,8 @@
 //   PLATES    electrified plates: same state for every racer on the game's pace; bluffs dead and live plates live
 //             the whole time such a racer is on them (with margin), never during the final collapse
 //   ITEMS     cannon / burst / EMP / ether boost all get used and do what they say
-//   PACING    first elimination typically 18–45 s; the race is rarely still undecided at the cap
+//   PACING    the first half is a warm-up (few good players out before 30 s); first elimination typically 25–48 s;
+//             the race is rarely still undecided at the cap
 import { loadGame, runRace, reactionProfile } from './harness.mjs'
 
 const quick = process.argv.includes('--quick')
@@ -21,18 +22,20 @@ const t0 = Date.now()
 const good = (n = 4, ms = 220) => Array.from({ length: n }, () => ({ ai: reactionProfile(ms) }))
 
 // LENGTH + PACING
-const lens = [], firstOut = [], why = {}
+const lens = [], firstOut = [], why = {}; let early = 0, racers = 0
 for (const n of [2, 3, 4]) for (let k = 0; k < N / 2; k++) {
   const R = runRace(G, good(n))
   if (!R.winner || R.t > 60.0001) fails.push(`LENGTH ${n}p race ended at ${R.t.toFixed(2)} s winner ${R.winner?.i}`)
   if (n === 4) {
     lens.push(R.t); why[R.decidedBy] = (why[R.decidedBy] || 0) + 1
     const d = R.active.filter((b) => !b.alive).map((b) => b.deathTick / 60); if (d.length) firstOut.push(Math.min(...d))
+    racers += R.active.length; early += d.filter((x) => x < 30).length
   }
 }
 const atCap = lens.filter((x) => x >= 60).length / lens.length
-console.log(`PACING 4 × 220 ms: race length p10 ${q(lens, 0.1).toFixed(0)} s · median ${q(lens, 0.5).toFixed(0)} s · p90 ${q(lens, 0.9).toFixed(0)} s · first out median ${q(firstOut, 0.5).toFixed(0)} s · reached the cap ${pct(atCap)} · decided by ${JSON.stringify(why)}`)
-if (q(firstOut, 0.5) < 18 || q(firstOut, 0.5) > 45) fails.push(`PACING first elimination median ${q(firstOut, 0.5).toFixed(1)} s (want 18–45)`)
+console.log(`PACING 4 × 220 ms: race length p10 ${q(lens, 0.1).toFixed(0)} s · median ${q(lens, 0.5).toFixed(0)} s · p90 ${q(lens, 0.9).toFixed(0)} s · first out median ${q(firstOut, 0.5).toFixed(0)} s · out before 30 s ${pct(early / racers)} of racers · reached the cap ${pct(atCap)} · decided by ${JSON.stringify(why)}`)
+if (q(firstOut, 0.5) < 25 || q(firstOut, 0.5) > 48) fails.push(`PACING first elimination median ${q(firstOut, 0.5).toFixed(1)} s (want 25–48)`)
+if (early / racers > 0.15) fails.push(`PACING ${pct(early / racers)} of good racers out before 30 s (want ≤ 15%)`)
 if (atCap > 0.4) fails.push(`PACING ${pct(atCap)} of races reach the 60 s cap`)
 
 // SOLVABLE: a flawless driver following each course's safe line never crashes (the race only ever uses such courses)
@@ -152,7 +155,7 @@ for (const key of Object.keys(S.TRACKS)) {
     L.push(R.t); const d = R.active.filter((b) => !b.alive).map((b) => b.deathTick / 60); if (d.length) F.push(Math.min(...d))
   }
   console.log(`TRACK ${key.padEnd(10)} median ${q(L, 0.5).toFixed(0)} s · p90 ${q(L, 0.9).toFixed(0)} s · first out ${q(F, 0.5).toFixed(0)} s`)
-  if (q(L, 0.9) > 60.0001 || q(F, 0.5) < 14 || q(F, 0.5) > 48) fails.push(`TRACK ${key} pacing out of range`)
+  if (q(L, 0.9) > 60.0001 || q(F, 0.5) < 25 || q(F, 0.5) > 52) fails.push(`TRACK ${key} pacing out of range`)
 }
 
 console.log(`${fails.length ? 'FAIL' : 'PASS'} acceptance (${((Date.now() - t0) / 1000).toFixed(0)} s)`)
