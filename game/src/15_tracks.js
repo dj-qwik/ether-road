@@ -15,7 +15,7 @@ const RAILGEO = (() => {
   const SPINES = {
     nebula: (s, o) => { o.x = 22 * Math.sin(s / 95) + 7 * Math.sin(s / 41 + 1.3); o.y = 7 * Math.sin(s / 73) + 1.8 * Math.sin(s / 29); },
     helix: (s, o) => { o.x = 14 * Math.sin(s / 60); o.y = 4 * Math.sin(s / 50) + 2 * Math.sin(s / 21); },
-    canyon: (s, o) => { const a = s / 60; o.x = 30 * (Math.sin(a) + 0.2 * Math.sin(3 * a)); o.y = 3 * Math.sin(s / 90); },
+    canyon: (s, o) => { const a = s / 75; o.x = 32 * (Math.sin(a) + 0.13 * Math.sin(3 * a)); o.y = 3 * Math.sin(s / 90); }, // wide switchbacks (tighter ones bend an inside pipe too sharply)
     cathedral: (s, o) => { o.x = 10 * Math.sin(s / 80); o.y = 18 * Math.sin(s / 110) + 6 * Math.sin(s / 37); },
     storm: (s, o) => { o.x = 30 * Math.sin(s / 120) + 10 * Math.sin(s / 33); o.y = 5 * Math.sin(s / 61); },
     ghost: (s, o) => { o.x = 16 * Math.sin(s / 52); o.y = 9 * Math.sin(s / 44 + 0.7); },
@@ -98,7 +98,7 @@ const RAILGEO = (() => {
         const rot = Math.acos(clamp(out[a] * out[b] + out[a + 1] * out[b + 1] + out[a + 2] * out[b + 2], -1, 1));
         calm0[k] = 1 / (1 + (rot / 0.06) * (rot / 0.06));
       }
-      const W = 60; let acc = 0;
+      const W = 240; let acc = 0; // ±60 u: the swell fades in and out gently
       for (let k = 0; k < NR + W; k++) { if (k < NR) acc += calm0[k]; if (k - 2 * W - 1 >= 0) acc -= calm0[k - 2 * W - 1]; const c = k - W; if (c >= 0 && c < NR) calm[c] = acc / (Math.min(NR - 1, k) - Math.max(0, k - 2 * W) + 1); }
       raw.push({ p, out, calm, bump: 0 });
     }
