@@ -97,7 +97,8 @@ const WORLD = (() => {
     // Your own pipe can never be hidden. Pass 1 draws everything else (other pipes, their balls, the scenery); pass 2
     // clears depth and draws your pipe, its spikes and pickups and your ball (layer 1) on top. Your pipe's glass
     // walls let the others show through, dimmed.
-    camOther = new T.PerspectiveCamera(76, 1, 3, 900); // other pipes closer than 3 u to the camera aren't drawn (no streaks across the view) camOther.layers.set(0); camera.layers.set(1);
+    // other pipes closer than 3 u to the camera aren't drawn (no streaks across the view)
+    camOther = new T.PerspectiveCamera(76, 1, 3, 900); camOther.layers.set(0); camera.layers.set(1);
     composer = new T.EffectComposer(renderer);
     composer.addPass(new T.RenderPass(scene, camOther));
     const mine = new T.RenderPass(scene, camera); mine.clear = false; mine.clearDepth = true;
@@ -623,5 +624,5 @@ const WORLD = (() => {
     composer.render(dt);
   }
   function shake(n) { cam.shake = Math.max(cam.shake, n); }
-  return { init, setRace, clearRace, frame, get ready() { return ready; }, get race() { return race; }, shake };
+  return { init, setRace, clearRace, frame, get ready() { return ready; }, get race() { return race; }, get camera() { return camera; }, shake };
 })();

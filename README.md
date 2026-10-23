@@ -116,6 +116,7 @@ node tools/nettest.mjs 1 4 --humans 2   # real server, real WebSockets, latency 
 node tools/accept.mjs             # race rules suite (above)
 node tools/cash_e2e.mjs           # needs anvil: deploy → deposit → race → replay-verified co-sign → payout
 cd ../contracts && forge test
+python3 game/tools/render_check.py       # a real race in headless Chromium: your pipe and ball must be on screen
 python3 game/tools/shot.py out practice   # screenshots in headless Chromium (Playwright)
 ```
 

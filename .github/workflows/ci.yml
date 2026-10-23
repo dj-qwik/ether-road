@@ -34,9 +34,19 @@ jobs:
       - name: race rules suite (solvable, fair seats, lazy play loses, skill wins, 60 s cap, all six tracks)
         working-directory: game
         run: node tools/accept.mjs
-      - name: every racer's rail is the same length on every track
+      - name: pipes equal length, never touching, smooth to ride (every track)
         working-directory: game
         run: node tools/tracks.mjs 4
+      - name: browser for the render check
+        run: |
+          pip install --quiet playwright
+          python3 -m playwright install --with-deps chromium
+      - name: render check (a real race in headless Chromium: your pipe and ball are on screen)
+        working-directory: game
+        run: python3 tools/render_check.py render-out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: render-check, path: game/render-out, if-no-files-found: ignore }
   contracts:
     runs-on: ubuntu-latest
     defaults: { run: { working-directory: contracts } }
