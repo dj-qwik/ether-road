@@ -41,7 +41,7 @@ jobs:
         run: |
           pip install --quiet playwright
           python3 -m playwright install --with-deps chromium
-      - name: render check (a real race in headless Chromium: your pipe and ball are on screen)
+      - name: "render check (a real race in headless Chromium, your pipe and ball must be on screen)"
         working-directory: game
         run: python3 tools/render_check.py render-out
       - uses: actions/upload-artifact@v4
