@@ -54,11 +54,24 @@ const WORLD = (() => {
     const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.anisotropy = 8; t.colorSpace = T.SRGBColorSpace;
     return t;
   }
+  // electrified plate: a high-voltage grid. Dead: dark plate, amber circuit lines and hazard edges. Live: blazing.
+  function plateTexture(live) {
+    const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+    g.fillStyle = live ? 'rgba(255,230,90,0.55)' : 'rgba(18,14,4,0.8)'; g.fillRect(0, 0, 128, 128);
+    g.strokeStyle = live ? '#fffbe0' : 'rgba(255,200,40,0.75)'; g.lineWidth = live ? 5 : 3;
+    g.beginPath(); for (const y of [16, 64, 112]) { g.moveTo(0, y); g.lineTo(40, y); g.lineTo(52, y - 12); g.lineTo(76, y - 12); g.lineTo(88, y); g.lineTo(128, y); } g.stroke();
+    if (!live) { g.fillStyle = 'rgba(255,200,40,0.9)'; for (let x = -16; x < 128; x += 16) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x + 8, 0); g.lineTo(x + 14, 6); g.lineTo(x + 6, 6); g.fill(); g.beginPath(); g.moveTo(x, 122); g.lineTo(x + 8, 122); g.lineTo(x + 14, 128); g.lineTo(x + 6, 128); g.fill(); } }
+    const t = new T.CanvasTexture(c); t.colorSpace = T.SRGBColorSpace; t.wrapS = t.wrapT = T.RepeatWrapping;
+    return t;
+  }
   function buildShared() {
     const hot = new T.Color(theme.hazard);
     M = {
       hotSolid: new T.MeshStandardMaterial({ color: 0x1a060c, emissive: hot, emissiveIntensity: 0.6, roughness: 0.35, metalness: 0.4 }),
       hotPatch: new T.MeshBasicMaterial({ color: hot.clone().multiplyScalar(0.9), transparent: true, opacity: 0.3, depthWrite: false, toneMapped: false, side: T.DoubleSide }),
+      plateDead: new T.MeshBasicMaterial({ map: plateTexture(false), transparent: true, opacity: 0.85, depthWrite: false, toneMapped: false, side: T.DoubleSide }),
+      plateLive: new T.MeshBasicMaterial({ map: plateTexture(true), color: new T.Color(1.6, 1.5, 0.9), transparent: true, depthWrite: false, toneMapped: false, side: T.DoubleSide, blending: T.AdditiveBlending }),
+      bolt: new T.LineBasicMaterial({ color: new T.Color(2, 2, 1.6), transparent: true, opacity: 0.95, toneMapped: false, depthWrite: false }),
       guide: new T.MeshBasicMaterial({ color: new T.Color(0xb6ff3b), transparent: true, opacity: 0.22, depthWrite: false, toneMapped: false, side: T.DoubleSide, blending: T.AdditiveBlending }),
       orb: new T.MeshBasicMaterial({ color: new T.Color(0xffe08a).multiplyScalar(1.6), toneMapped: false }),
       glowTex: glowTexture(),
@@ -212,7 +225,40 @@ const WORLD = (() => {
     race.top = rl;
   }
   // ── spikes on the pipe wall: one instanced mesh per group (a cone per position per row) over a red patch
+  function makePlate(g, rl) {
+    const segs = []; for (let k = 0; k < SEGS; k++) if ((g.mask >> k) & 1) segs.push(k);
+    const len = g.s1 - g.s0, NR = Math.max(2, Math.ceil(len / 0.5) + 1), v = [], uv = [], idx = [];
+    let base = 0;
+    for (const k of segs) {
+      for (let i = 0; i < NR; i++) for (let j = 0; j < 2; j++) { const f = tubeAt(rl, g.s0 + (len * i) / (NR - 1), k - 0.5 + j, TUBE_R - 0.025); v.push(f.x, f.y, f.z); uv.push(j, (len * i) / (NR - 1) / 1.2); }
+      for (let i = 0; i < NR - 1; i++) { const a = base + i * 2; idx.push(a, a + 2, a + 1, a + 1, a + 2, a + 3); }
+      base += NR * 2;
+    }
+    const pg = new T.BufferGeometry(); pg.setAttribute('position', new T.Float32BufferAttribute(v, 3)); pg.setAttribute('uv', new T.Float32BufferAttribute(uv, 2)); pg.setIndex(idx);
+    const grp = new T.Group(), mesh = new T.Mesh(pg, M.plateDead); mesh.frustumCulled = false; grp.add(mesh);
+    // crackling arcs over the plate while it's live (re-drawn every few frames)
+    const NB = 6, SEG = 7, bp = new Float32Array(NB * SEG * 2 * 3), bg = new T.BufferGeometry(); bg.setAttribute('position', new T.BufferAttribute(bp, 3));
+    const bolts = new T.LineSegments(bg, M.bolt); bolts.frustumCulled = false; bolts.visible = false; grp.add(bolts);
+    setLayer(grp, rl.layer); rl.grp.add(grp);
+    return { kind: 'plate', g: grp, mesh, bolts, segs, ref: g, s0: g.s0, s1: g.s1, rl, wasOn: false };
+  }
+  function boltsFor(it) {
+    const { ref: g, segs, rl } = it, a = it.bolts.geometry.attributes.position, p = a.array, NB = 6, SEG = 7;
+    let o = 0;
+    for (let n = 0; n < NB; n++) {
+      const x0 = segs[Math.floor(Math.random() * segs.length)] + (Math.random() - 0.5), x1 = segs[Math.floor(Math.random() * segs.length)] + (Math.random() - 0.5);
+      const sA = g.s0 + Math.random() * (g.s1 - g.s0), sB = g.s0 + Math.random() * (g.s1 - g.s0);
+      let prev = null;
+      for (let k = 0; k <= SEG; k++) {
+        const u = k / SEG, f = tubeAt(rl, lerp(sA, sB, u) + (k && k < SEG ? (Math.random() - 0.5) * 0.5 : 0), lerp(x0, x1, u) + (k && k < SEG ? (Math.random() - 0.5) * 0.5 : 0), TUBE_R - 0.08 - (k && k < SEG ? Math.random() * 0.25 : 0));
+        if (prev) { p.set(prev, o); p.set([f.x, f.y, f.z], o + 3); o += 6; }
+        prev = [f.x, f.y, f.z];
+      }
+    }
+    a.needsUpdate = true;
+  }
   function makeGroup(g, rl) {
+    if (g.ph != null) return makePlate(g, rl);
     // spiral sleeves are long runs of thin slices: one row of single spikes each, so the twisting channel stays readable
     const sleeve = g.kind === 'spiral', len = g.s1 - g.s0, rows = sleeve ? 1 : Math.max(1, Math.round(len / 0.55)), step = len / rows, DX = sleeve ? [0] : [-0.22, 0.22];
     const segs = []; for (let k = 0; k < SEGS; k++) if ((g.mask >> k) & 1) segs.push(k);
@@ -358,7 +404,7 @@ const WORLD = (() => {
     return grp;
   }
   // ── per-frame: build/show what's ahead on the followed pipe
-  function updateItems(rl, b, t, s) {
+  function updateItems(rl, b, t, s, tick) {
     const C = race.R.course, items = rl.items;
     const want = (key, make) => { let it = items.get(key); if (!it) { it = make(); items.set(key, it); } return it; };
     const H = C.blocks;
@@ -370,6 +416,15 @@ const WORLD = (() => {
       // anything already behind the ball would sit between it and the camera: hidden
       const passed = it.s1 < s - 0.4;
       if (it.kind === 'group') it.g.visible = !passed && !b.gone.has(it.ref.id);
+      else if (it.kind === 'plate') {
+        it.g.visible = !passed && !b.gone.has(it.ref.id);
+        const ph = SIM0.zapPhase(it.ref, tick), P = SIM0.ZAP.period, on = ph < P * SIM0.ZAP.on, warn = !on && ph > P - SIM0.ZAP.warn;
+        const lit = on || (warn && Math.floor(performance.now() / 55) % 2 === 0);
+        it.mesh.material = lit ? M.plateLive : M.plateDead;
+        it.bolts.visible = on; if (on && race.frameNo % 3 === 0) boltsFor(it);
+        if (on && !it.wasOn && it.g.visible && it.s0 - s < 45 && it.s0 - s > -1 && typeof SFX !== 'undefined' && SFX.zap) SFX.zap();
+        it.wasOn = on;
+      }
       else if (it.kind === 'pickup') { it.g.visible = !passed && !b.got.includes(it.ref.id); it.m.rotation.y = t * 3; it.m.rotation.x = t * 1.3; }
       else { it.g.visible = !passed && !b.strips.includes(it.ref.id); it.m.material.map.offset.y = -t * (it.ref.kind === 'boost' ? 2.5 : 0.6); }
     }
@@ -390,7 +445,7 @@ const WORLD = (() => {
     const top = followSp ? followSp.rl : race.rails[0];
     if (race.top !== top) setFollowed(top);
     const fv = view.spheres.find((x) => x.i === top.b.i) || view.spheres[0];
-    updateItems(top, top.b, t, fv ? fv.s : 0);
+    updateItems(top, top.b, t, fv ? fv.s : 0, view.tick != null ? view.tick : race.R.tick);
     { const sv = fv ? fv.s : 0; for (const r of race.rails) for (const c of r.chunks) { c.pipe.visible = c.s1 > sv - 12 && c.s0 < sv + VIEW_AHEAD + 20; } }
     // balls
     for (const sp of race.spheres) {

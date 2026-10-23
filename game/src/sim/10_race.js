@@ -61,14 +61,26 @@ function cachePlan(r) {
 }
 
 // ───── course difficulty (seconds) ─────
-const GAPT = [[2.6, 1.3], [12, 0.95], [25, 0.72], [38, 0.56], [48, 0.44], [53, 0.34], [57, 0.28], [60, 0.24]]; // time between spike patterns
-const WIDTH = [[2.6, 8], [10, 6.2], [20, 4.7], [32, 3.6], [42, 2.9], [48, 2.3], [51, 1.6], [54, 1], [60, 1]];     // opening width (positions)
+const GAPT = [[2.6, 1.25], [12, 0.88], [25, 0.66], [38, 0.52], [48, 0.41], [53, 0.32], [57, 0.27], [60, 0.23]]; // time between spike patterns
+const WIDTH = [[2.6, 8], [10, 6], [20, 4.4], [32, 3.3], [42, 2.8], [48, 2.3], [51, 1.6], [54, 1], [60, 1]];     // opening width (positions)
 const COLLAPSE_AT = 48; // "FINAL COLLAPSE": the pipe tightens until someone breaks
 const REACT = 0.1, STEP_SEC = STEP_TICKS * DT; // openings ahead are visible well in advance: planning absorbs most of the reaction time
 const maxShift = (dt, tt = 0) => clamp(Math.floor((dt * (tt >= COLLAPSE_AT ? 0.97 : 0.88) - (tt >= COLLAPSE_AT ? 0.05 : REACT)) / STEP_SEC), 0, SEGS / 2);
 const FULL = (1 << SEGS) - 1;
 function gapMask(c, w) { let m = FULL; for (let k = 0; k < w; k++) m &= ~(1 << segWrap(c - ((w - 1) >> 1) + k)); return m; }
 const KIND = { spike: { len: 0.8 } };
+// ───── electrified plates ─────
+// A wide arc of the pipe wall that pulses with the music: live for 2 beats, dead for 2 (144 BPM, so 0.83 s each),
+// flickering for 0.3 s before it goes live. Touch it while it's live and you're out, exactly like spikes. It runs on
+// the race clock, so every racer at the game's speed meets it in the same state. Two kinds, 50/50:
+//   bluff — the plate lies across the safe line but is dead the whole time you pass (if you're on the game's pace):
+//           roll straight over it, or dodge round it if you don't trust it
+//   live  — the plate covers where you are and is live the whole time you pass: get off it
+// Racers off the game's pace (a strip, a burst or EMP hit, ether boost) meet it in a different state: read the pulse.
+const ZAP = { period: 4 * BEAT, on: 0.5, warn: 0.3, len: [3.5, 6.5], width: [6, 10] };
+const zapPhase = (g, tick) => { const P = ZAP.period, x = (tick * DT - g.ph) % P; return x < 0 ? x + P : x; };
+/** is plate g live on this tick? (spike groups are always "live") */
+function zapOn(g, tick) { return g.ph == null || zapPhase(g, tick) < ZAP.period * ZAP.on; }
 
 /**
  * Build a course from a seed string. Pure function of the seed: the server and every browser build the same one.
@@ -84,18 +96,30 @@ function buildCourse(seed, trackKey) {
   let id = 0, pat = 0, c = 0, t = 1.2, lastDir = r() < 0.5 ? 1 : -1;
   const mix = Object.entries(track.mix);
   const pickKind = (tt) => {
-    const w = mix.map(([k, v]) => [k, tt < 6 ? (k === 'ring' ? 1 : 0) : tt < 12 && k === 'spiral' ? 0 : tt < 16 && k === 'cluster' ? 0 : tt >= COLLAPSE_AT && k === 'cluster' ? v * 0.4 : v]);
+    const w = mix.map(([k, v]) => [k, tt < 6 ? (k === 'ring' ? 1 : 0) : tt < 12 && k === 'spiral' ? 0 : tt < 16 && k === 'cluster' ? 0 : (tt < 8 || tt >= COLLAPSE_AT) && k === 'zap' ? 0 : tt >= COLLAPSE_AT && k === 'cluster' ? v * 0.4 : v]);
     let x = r() * w.reduce((a, [, v]) => a + v, 0); for (const [k, v] of w) { if ((x -= v) <= 0) return k; } return 'ring';
   };
   const group = (kind, s0, s1, mask) => { const g = { id: id++, pat, kind, s0, s1, mask }; blocks.push(g); return g; };
   const shiftTo = (from, m) => { if (m <= 0) return from; let mag = Math.max(1, Math.round(m * (t >= COLLAPSE_AT ? 0.75 + 0.25 * r() : 0.4 + 0.6 * r()))); const dir = r() < 0.72 ? -lastDir : lastDir; lastDir = dir; return segWrap(from + dir * mag); };
   while (t < RACE_SECONDS + 5) {
     let gap = pwl(GAPT, t) * (0.92 + 0.22 * r());
-    const kind = pickKind(t);
+    let kind = pickKind(t);
     const w = clamp(Math.round(pwl(WIDTH, t) + (r() - 0.5) * (t < COLLAPSE_AT ? 1.2 : 0.6)), t < COLLAPSE_AT ? 2 : 1, 8);
     // a pickup or strip is due: put it off the safe line in the open stretch, and leave time to get there and back
     const dueE = plan.length && t >= plan[0][0] && t > 4 ? plan.shift() : null, due = dueE && dueE[1];
     let nextC = shiftTo(c, maxShift(gap, t));
+    if (kind === 'zap' && (due || t + gap * 1.6 >= COLLAPSE_AT)) kind = 'ring'; // plates stay out of pickup stretches and the final collapse
+    let zap = null;
+    if (kind === 'zap') {
+      // plate width and length; live plates sit on where you are and push you off to a spot you can reach in time
+      const wz = clamp(Math.round(lerp(ZAP.width[0], ZAP.width[1], r())), ZAP.width[0], ZAP.width[1]), L = lerp(ZAP.len[0], ZAP.len[1], r()), live = r() < 0.5;
+      if (live) {
+        const dir = r() < 0.5 ? -1 : 1, dist = ((wz - 1) >> 1) + 1 + (wz % 2 ? 0 : dir > 0 ? 1 : 0) + Math.floor(r() * 2);
+        nextC = segWrap(c + dir * dist);
+        gap = Math.max(gap, (dist * STEP_SEC + REACT) / 0.85 + 0.08);
+      }
+      zap = { wz, L, live, at: live ? c : nextC };
+    }
     if (due === 'cache') {
       // the cache's items in a row round the pipe, 2 positions apart, centred 4–5 positions off the safe line
       const items = dueE[2], n = items.length, dir = r() < 0.5 ? -1 : 1, mid = segWrap(c + dir * (4 + Math.floor(r() * 2)));
@@ -125,7 +149,14 @@ function buildCourse(seed, trackKey) {
     }
     const tm = t + gap, s0 = sAtT(tm), v = speedAt(tm);
     pat++;
-    if (kind === 'spiral') {
+    if (zap) {
+      const s1 = s0 + zap.L, ta = tOfS(s0 - SPHERE_R), te = tOfS(s1 + SPHERE_R), mid = (ta + te) / 2;
+      const g = group('zap', s0, s1, FULL ^ gapMask(zap.at, zap.wz));
+      // centre the live window (live) or the dead window (bluff) on the moment a racer on the game's pace is on it
+      g.ph = mid - (zap.live ? 0.25 : 0.75) * ZAP.period; g.live = zap.live ? 1 : 0;
+      path.push({ s: s0, seg: nextC });
+      c = nextC; t = tm + zap.L / v;
+    } else if (kind === 'spiral') {
       // a long sleeve of spikes with a twisting channel to follow
       const late = clamp((t - 20) / 30, 0, 1), tau = (0.9 + r() * 0.9) * (1 - 0.4 * late), L = v * tau, n = Math.max(3, Math.round(L / 1.0)), len = L / n;
       const turns = (r() < 0.5 ? -1 : 1) * Math.max(2, Math.round(tau * (3 + 2.5 * late + r() * 3.5)));
@@ -188,14 +219,23 @@ function stepCtl(b) {
 }
 /** Index of the first spike group that could still touch a racer at distance s (groups are sorted by start). */
 function firstBlock(H, s) { let lo = 0, hi = H.length; while (lo < hi) { const m = (lo + hi) >> 1; if (H[m].s0 < s - 30) lo = m + 1; else hi = m; } return lo; }
-/** Is position `seg` covered by spikes (that this racer hasn't destroyed) anywhere in [sA, sB]? */
-function blockedAt(course, b, seg, sA, sB) {
+/** Is position `seg` covered by spikes (that this racer hasn't destroyed) anywhere in [sA, sB]? With `tick` (now),
+ *  a plate only counts if it is live while this racer, at its current speed, would be on it; without, plates count
+ *  as always live. */
+function blockedAt(course, b, seg, sA, sB, tick) {
   const H = course.blocks;
   for (let j = firstBlock(H, sA); j < H.length; j++) {
     const g = H[j]; if (g.s0 - SPHERE_R > sB) break;
     if (g.s1 + SPHERE_R < sA || !((g.mask >> seg) & 1) || (b.gone && b.gone.has(g.id))) continue;
+    if (g.ph != null && tick != null && !zapLiveDuring(g, b, tick)) continue;
     return true;
   }
+  return false;
+}
+/** would plate g be live at any moment racer b (holding its current speed) is on it? (2 ticks of margin each side) */
+function zapLiveDuring(g, b, tick) {
+  const per = Math.max(5, b.v || 20) * DT, k0 = Math.floor(tick + (g.s0 - SPHERE_R - b.s) / per) - 2, k1 = Math.ceil(tick + (g.s1 + SPHERE_R - b.s) / per) + 2;
+  for (let k = Math.max(tick, k0); k <= k1; k++) if (zapOn(g, k)) return true;
   return false;
 }
 /** Nearest position with no spikes in group g's mask (prefer `pref` direction on a tie). */
@@ -237,12 +277,13 @@ function moveSphere(b, course, tick) {
   }
 }
 /** Does racer b hit spikes this tick? (not counting shield / invincibility) */
-function spikeHit(course, b) {
+function spikeHit(course, b, tick) {
   const H = course.blocks, s = b.s;
   for (let j = firstBlock(H, s); j < H.length; j++) {
     const g = H[j];
     if (g.s0 - SPHERE_R >= s) break;
     if (g.s1 + SPHERE_R <= s || !((g.mask >> b.cl) & 1) || b.gone.has(g.id)) continue;
+    if (g.ph != null && !zapOn(g, tick)) continue;
     return g;
   }
   return null;
@@ -339,6 +380,7 @@ function createRound(cfg, rng = {}) {
     for (let j = firstBlock(H, b.s); j < H.length; j++) {
       const h = H[j]; if (h.s0 - SPHERE_R > b.s + look) break;
       if (h.s1 + SPHERE_R < b.s || b.gone.has(h.id)) continue;
+      if (h.ph != null && !zapLiveDuring(h, b, tick)) continue; // a plate that will be dead when we get there
       if ((h.mask >> planned) & 1) { g = h; break; }
     }
     let goal = planned, seen = null, until = b.s + v * STEP_SEC * 1.2;
@@ -368,7 +410,7 @@ function createRound(cfg, rng = {}) {
       let d = segDist(planned, goal); if (d === SEGS / 2 || d === -SEGS / 2) d = b.dir || 1;
       const dir = d > 0 ? 1 : -1, next = segWrap(planned + dir);
       // never step into spikes between here and the spikes we're steering for
-      if (!blockedAt(course, b, next, b.s, until)) {
+      if (!blockedAt(course, b, next, b.s, until, tick)) {
         bits |= dir > 0 ? IN_R : IN_L;
         if (Math.abs(d) === 1 && b.overPending) { b.overPending = false; b.extra = dir; }
       }
@@ -424,7 +466,7 @@ function createRound(cfg, rng = {}) {
       const died = [];
       for (const b of active) {
         if (!b.alive || tick <= b.empUntil || tick <= b.etherUntil || tick <= b.immuneUntil) continue;
-        const g = spikeHit(course, b);
+        const g = spikeHit(course, b, tick);
         if (!g) continue;
         if (b.shield) { b.shield = 0; b.shieldUsedTick = tick; b.immuneUntil = tick + 36; events.push({ tick, kind: 'blocked', item: 'spike', i: b.i }); continue; }
         if (god.has(b.i)) continue;
@@ -483,11 +525,11 @@ function pilotSurvives(course, trace) {
     if (want !== planned && b.q.length === 0 && b.stepT <= 1) {
       const d = segDist(planned, want), dir = d > 0 ? 1 : -1, next = segWrap(planned + dir);
       const until = pi < P.length ? Math.max(b.s, P[pi].s - SPHERE_R - 0.01) : b.s + 2;
-      if (!blockedAt(course, b, next, b.s, until)) pushStep(b, dir);
+      if (!blockedAt(course, b, next, b.s, until, tick)) pushStep(b, dir);
     }
     stepCtl(b);
     b.v = speedAt((tick - 1) * DT); b.s += b.v * DT;
-    const hit = spikeHit(course, b);
+    const hit = spikeHit(course, b, tick);
     if (hit) { if (trace) Object.assign(trace, { tick, seg: b.cl, g: hit, want: pi < P.length ? P[pi] : null }); return false; }
   }
   return true;
@@ -498,11 +540,11 @@ function pilotSurvives(course, trace) {
 // opening, twin rings with two, twisting spiral channels, scattered clusters). The difficulty schedule is the same on
 // every track, and inside a race every racer gets the identical course, so the track drawn never favours anyone.
 const TRACKS = {
-  nebula: { key: 'nebula', name: 'Nebula Run', sub: 'Long sweeping curves. A bit of everything.', theme: 'void', mix: { ring: 4, twin: 2, spiral: 2, cluster: 2 }, layout: ['spread', 'bundle', 'swap', 'spread', 'twist', 'bundle'] },
-  helix: { key: 'helix', name: 'Ion Helix', sub: 'Pipes corkscrew round each other. Spiral channels.', theme: 'ion', mix: { ring: 2, twin: 1, spiral: 5, cluster: 1 }, layout: ['twist', 'bundle', 'twist', 'swap', 'twist', 'bundle'] },
-  canyon: { key: 'canyon', name: 'Solar Canyon', sub: 'Switchbacks and hard rings.', theme: 'solar', mix: { ring: 5, twin: 3, spiral: 1, cluster: 1 }, layout: ['spread', 'swap', 'spread', 'bundle', 'swap', 'bundle'] },
-  cathedral: { key: 'cathedral', name: 'Prism Cathedral', sub: 'Climbs and drops past glass. Spike fields.', theme: 'prism', mix: { ring: 2, twin: 1, spiral: 2, cluster: 5 }, layout: ['bundle', 'spread', 'bundle', 'twist', 'spread', 'swap'] },
-  storm: { key: 'storm', name: 'Vector Storm', sub: 'Pipes flung far apart, then slammed together.', theme: 'vector', mix: { ring: 3, twin: 3, spiral: 3, cluster: 1 }, layout: ['spread', 'spread', 'bundle', 'spread', 'swap', 'bundle'] },
-  ghost: { key: 'ghost', name: 'Signal Ghost', sub: 'Braids and crossings. Twisting channels.', theme: 'signal', mix: { ring: 2, twin: 2, spiral: 3, cluster: 3 }, layout: ['swap', 'bundle', 'swap', 'twist', 'swap', 'bundle'] },
+  nebula: { key: 'nebula', name: 'Nebula Run', sub: 'Long sweeping curves. A bit of everything.', theme: 'void', mix: { ring: 4, twin: 2, spiral: 2, cluster: 2, zap: 2.5 }, layout: ['spread', 'bundle', 'swap', 'spread', 'twist', 'bundle'] },
+  helix: { key: 'helix', name: 'Ion Helix', sub: 'Pipes corkscrew round each other. Spiral channels.', theme: 'ion', mix: { ring: 2, twin: 1, spiral: 5, cluster: 1, zap: 2 }, layout: ['twist', 'bundle', 'twist', 'swap', 'twist', 'bundle'] },
+  canyon: { key: 'canyon', name: 'Solar Canyon', sub: 'Switchbacks and hard rings.', theme: 'solar', mix: { ring: 5, twin: 3, spiral: 1, cluster: 1, zap: 2.5 }, layout: ['spread', 'swap', 'spread', 'bundle', 'swap', 'bundle'] },
+  cathedral: { key: 'cathedral', name: 'Prism Cathedral', sub: 'Climbs and drops past glass. Spike fields.', theme: 'prism', mix: { ring: 2, twin: 1, spiral: 2, cluster: 5, zap: 2.5 }, layout: ['bundle', 'spread', 'bundle', 'twist', 'spread', 'swap'] },
+  storm: { key: 'storm', name: 'Vector Storm', sub: 'Pipes flung far apart, then slammed together.', theme: 'vector', mix: { ring: 3, twin: 3, spiral: 3, cluster: 1, zap: 4 }, layout: ['spread', 'spread', 'bundle', 'spread', 'swap', 'bundle'] },
+  ghost: { key: 'ghost', name: 'Signal Ghost', sub: 'Braids and crossings. Twisting channels.', theme: 'signal', mix: { ring: 2, twin: 2, spiral: 3, cluster: 3, zap: 3 }, layout: ['swap', 'bundle', 'swap', 'twist', 'swap', 'bundle'] },
 };
 const ARENAS = TRACKS;

@@ -121,7 +121,7 @@ const NET = (() => {
       while (pi < pend.length && Math.max(pend[pi][0], R.tick + 1) <= k) { const bit = pend[pi][1]; if (bit === IN_USE ? used & IN_USE : used & (IN_L | IN_R)) break; used |= bit; pi++; }
       if (k > b.empUntil) { if (used & IN_L) SIM0.pushStep(b, -1); if (used & IN_R) SIM0.pushStep(b, 1); }
       SIM0.moveSphere(b, R.course, k);
-      if (k > b.empUntil && k > b.etherUntil && k > b.immuneUntil && SIM0.spikeHit(R.course, b)) {
+      if (k > b.empUntil && k > b.etherUntil && k > b.immuneUntil && SIM0.spikeHit(R.course, b, k)) {
         if (b.shield) { b.shield = 0; b.immuneUntil = k + 36; } else { b.alive = false; b.deathTick = k; break; }
       }
     }

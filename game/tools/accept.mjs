@@ -5,6 +5,8 @@
 //   EXPLOIT   lazy play (idle, holding a direction, wiggling, random presses, spamming Use) never beats good players
 //   SKILL     players who react faster win more: 150 ms > 220 ms > 300 ms > 400 ms
 //   PICKUPS   random caches of 2–3 items (take one, the rest vanish for you) + 2 boost/2 slow strips, same spots for everyone, never under spikes
+//   PLATES    electrified plates: same state for every racer on the game's pace; bluffs dead and live plates live
+//             the whole time such a racer is on them (with margin), never during the final collapse
 //   ITEMS     cannon / burst / EMP / ether boost all get used and do what they say
 //   PACING    first elimination typically 18–45 s; the race is rarely still undecided at the cap
 import { loadGame, runRace, reactionProfile } from './harness.mjs'
@@ -99,6 +101,23 @@ for (const [name, ctl] of Object.entries(LAZY)) {
   }
   console.log(`PICKUPS ${N - bad}/${N} courses ok · ${(caches / N).toFixed(1)} caches per course · ${mixes.size} different cache mixes seen · racers picked different items in ${split}/${N} races`)
   if (bad) fails.push(`PICKUPS ${bad} courses with bad, missing or covered caches`)
+}
+
+// PLATES: every plate's pulse checked against a racer rolling at the game's pace
+{
+  let plates = 0, live = 0, bad = 0
+  for (let k = 0; k < N; k++) {
+    const R = runRace(G, good(2)), C = R.course, tl = C.tl
+    for (const g of C.blocks) {
+      if (g.ph == null) continue
+      plates++; if (g.live) live++
+      const k0 = Math.floor(tl.tickAtS(g.s0 - S.SPHERE_R)) - 6, k1 = Math.ceil(tl.tickAtS(g.s1 + S.SPHERE_R)) + 6
+      for (let q = k0; q <= k1; q++) if (S.zapOn(g, q) !== !!g.live) { bad++; break }
+      if (tl.tOfS(g.s0) >= S.COLLAPSE_AT) bad++
+    }
+  }
+  console.log(`PLATES ${(plates / N).toFixed(1)} per course (${Math.round((live / Math.max(1, plates)) * 100)}% live, the rest bluffs) · ${bad} with the wrong state while a racer on pace is on them`)
+  if (bad || plates < N * 2) fails.push(`PLATES ${bad} plates with the wrong state, ${(plates / N).toFixed(1)} per course`)
 }
 
 // ITEMS: each held item gets used, and its effect shows up

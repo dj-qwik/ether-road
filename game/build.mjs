@@ -25,7 +25,7 @@ const body = ['01_base.js', '10_race.js'].map((f) => `// ═════ sim/${f
 const EXPORTS = ['ARENAS', 'TRACKS', 'POWERS', 'ITEM_CODE', 'createRound', 'buildCourse', 'packInput', 'unpackInput', 'IDLE_INPUT', 'TAP', 'IN_L', 'IN_R', 'IN_USE',
   'DT', 'RACE_SECONDS', 'RACE_TICKS', 'BEAT', 'SEGS', 'TUBE_R', 'SPHERE_R', 'STEP_TICKS', 'STEP_MID', 'ORB_R', 'speedAt', 'sAtTick', 'sAtT', 'tOfS', 'tickAtS',
   'KIND', 'COLLAPSE_AT', 'ROSTER', 'STRIP', 'TL0', 'moveSphere', 'fxMul', 'firstBlock', 'pushStep', 'stepCtl', 'spikeHit', 'blockedAt', 'segWrap', 'segDist',
-  'racerSpeed', 'qSum', 'pilotSurvives', 'nearestFree', 'SLOW_FX', 'EMP_FX', 'WAVE_SPEED', 'EMP_SPEED', 'SHOT_SPEED', 'SHOT_RANGE']
+  'racerSpeed', 'qSum', 'pilotSurvives', 'nearestFree', 'SLOW_FX', 'EMP_FX', 'WAVE_SPEED', 'EMP_SPEED', 'SHOT_SPEED', 'SHOT_RANGE','ZAP','zapOn','zapPhase','zapLiveDuring']
 const createSimSrc = `// ═════════════════ createSim(env) — one isolated, deterministic simulation instance ═════════════════
 // env = { seed }. Create a fresh instance per race so no state leaks between races.
 function createSim(env = {}) {

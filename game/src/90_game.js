@@ -109,7 +109,7 @@ function practiceCard() {
 }
 const HOWTO = [
   'Your ball rolls forward on its own. Slide left / right round the pipe wall (←/→, A/D, d-pad). Hold to keep sliding.',
-  'Red spikes are the only danger. Touch them and you are out. Find the gap.',
+  'Red spikes kill. So do yellow electric plates while they are live: they pulse with the beat and flicker just before they switch on. Some are dead when you reach them, some are not.',
   'Pickups come in small groups: roll over the one you want, the others vanish. Space / ✕ uses it: cannon (2 shots, blows up spikes), burst (slows rivals), EMP (knocks out balls ahead), ether boost (fast + invincible 3 s).',
   'Optional strips: cyan boost (faster), amber slow (more time). Still alive at 60 s? Furthest along wins.'];
 function introCard(seconds, online) {
