@@ -6,10 +6,10 @@
 // other or swap sides. Because they always stay evenly spaced on that circle, and the circle never shrinks below the
 // pipes' width plus a gap, two pipes can never pass through each other.
 //
-// Equal length: the road is cut into 96-unit stretches; any pipe shorter than the longest in a stretch gets a smooth
-// outward bulge (away from the spine, so it only ever moves AWAY from the other pipes), sized by bisection until its
-// length matches. Then every pipe is re-sampled by arc length inside each stretch, so equal track distance means equal
-// pipe length, everywhere.
+// Equal length: every pipe shorter than the longest gets long, low swells outward (away from the spine, so it only
+// ever moves AWAY from the other pipes), sized by bisection until its length matches. Then every pipe is re-sampled
+// evenly by arc length, so track distance s is the same fraction of every pipe and every ball moves at the same speed
+// along its own pipe. (Matching length stretch by stretch instead needs tight wiggles, which throw the camera about.)
 const RAILGEO = (() => {
   // the spine each track's pipes are braided around (x across, y up, z = −s forward)
   const SPINES = {
@@ -30,14 +30,16 @@ const RAILGEO = (() => {
   }
   const smooth = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
   const GAP = 1.1; // clear space between neighbouring pipes, world units
-  const BULGE_SOFT = 3.5; // an equalizing wave taller than this is split into more, smaller waves
   const rhoMin = (n) => (n < 2 ? 0 : (TUBE_R + GAP / 2) / Math.sin(Math.PI / n) + 0.3);
   const theta0 = (n) => (n === 2 ? 0 : n === 3 ? Math.PI / 2 : Math.PI / 4); // side by side · triangle · square
   function sections(course, sAtT, n) {
     const rm = rhoMin(n);
     let th = theta0(n), rho = rm;
-    return course.layout.map((L) => {
-      const target = L.kind === 'launch' ? rm : L.kind === 'bundle' ? rm + 0.5 : L.kind === 'spread' ? rm + 5 + 4 * Math.abs(L.rise || 0) : L.kind === 'twist' ? rm + 1.2 : rm + 1.8;
+    return course.layout.map((L0) => {
+      // a section cut short (the layout ends where the final collapse begins) just holds the arrangement: squeezing
+      // or flinging the pipes over a few units would throw them (and the camera) around
+      const L = sAtT(L0.t1) - sAtT(L0.t0) < 60 ? { ...L0, kind: 'hold' } : L0;
+      const target = L.kind === 'hold' ? rho : L.kind === 'launch' ? rm : L.kind === 'bundle' ? rm + 0.5 : L.kind === 'spread' ? rm + 5 + 4 * Math.abs(L.rise || 0) : L.kind === 'twist' ? rm + 1.2 : rm + 1.8;
       let dth = L.kind === 'twist' ? (L.spin || 1) * 2 * Math.PI : L.kind === 'swap' ? (L.spin || 1) * Math.PI : L.kind === 'spread' ? 0.35 * (L.spin || 1) : 0;
       const s0 = sAtT(L.t0), s1 = sAtT(L.t1), rr = Math.max(rho, target);
       // pipes may sweep round each other at most 0.28 u sideways per u forward (smoothstep peaks at 1.5× the average):
@@ -54,10 +56,11 @@ const RAILGEO = (() => {
     if (n < 2) return [0, 0];
     let k = secs.length - 1; while (k > 0 && secs[k].s0 > s) k--;
     const a = secs[k], u = clamp((s - a.s0) / Math.max(1, a.s1 - a.s0), 0, 1);
-    const rho = lerp(a.rho0, a.rho1, smooth(Math.min(1, u / 0.35))), th = a.th0 + a.dth * smooth(u) + (2 * Math.PI * j) / n;
+    const ramp = clamp(0.35 * (a.s1 - a.s0), 40, Math.max(1, a.s1 - a.s0)), rho = lerp(a.rho0, a.rho1, smooth(Math.min(1, (s - a.s0) / ramp))), th = a.th0 + a.dth * smooth(u) + (2 * Math.PI * j) / n;
     return [rho * Math.cos(th), rho * Math.sin(th)];
   }
-  const S0 = -30, RAW = 0.25, CH = 96, STEP = 0.25; // start 30 u behind the line; raw step; stretch length; drawn step (track units)
+  const S0 = -30, RAW = 0.25, STEP = 0.25; // start 30 u behind the line; raw step; drawn step (track units)
+  const SWELL = 240, SWELL_MAX = 30; // equalizing swells: about one per 240 u, never taller than 30 u
   // frames (side, up) for a polyline: side = T × worldUp, up = side × T
   function frames(pos, N) {
     const side = new Float32Array(N * 3), up = new Float32Array(N * 3);
@@ -71,12 +74,12 @@ const RAILGEO = (() => {
     return { side, up };
   }
   /**
-   * Build the pipes for a race. Returns [{ N, pos, side, up, len, bump, out }] sampled every STEP track units from s = −30:
-   * centre line, frame, the pipe's length over each stretch (identical across pipes), and the biggest bulge added.
+   * Build the pipes for a race. Returns [{ N, pos, side, up, total, bump, waves }] sampled every STEP track units from
+   * s = −30: centre line, frame, total length (identical across pipes), and the swell height and count added.
    */
   function build(course, n, sAtT, trackKey) {
     const key = SPINES[trackKey] ? trackKey : 'nebula', secs = sections(course, sAtT, n);
-    const sEnd = course.end + 60, NR = Math.ceil((sEnd - S0) / RAW) + 1, PER = CH / RAW, chunks = Math.floor((NR - 1) / PER);
+    const sEnd = course.end + 60, NR = Math.ceil((sEnd - S0) / RAW) + 1;
     // 1) raw centre lines round the spine, and each one's outward direction (away from the spine)
     const raw = [];
     for (let j = 0; j < n; j++) {
@@ -89,63 +92,51 @@ const RAILGEO = (() => {
       }
       raw.push({ p, out, bump: 0 });
     }
-    // 2) equalize every stretch with a smooth outward bulge on the shorter pipes
-    const bulge = (A, humps, u) => A * (1 - Math.cos(2 * Math.PI * humps * u)) / 2;
-    const segLen = (r, k0, k1, A, humps) => {
+    // 2) equal length over the whole race: each shorter pipe gets long, low swells (one every ~240 u) outward from
+    //    the spine, sized by bisection. Long swells keep the ride smooth: no tight wiggles for the camera to follow.
+    const bulge = (A, waves, u) => A * (1 - Math.cos(2 * Math.PI * waves * u)) / 2;
+    const lenOf = (r, A, waves) => {
       let L = 0, px = 0, py = 0, pz = 0;
-      for (let k = k0; k <= k1; k++) {
-        const h = bulge(A, humps, (k - k0) / (k1 - k0));
+      for (let k = 0; k < NR; k++) {
+        const h = A ? bulge(A, waves, k / (NR - 1)) : 0;
         const x = r.p[k * 3] + r.out[k * 3] * h, y = r.p[k * 3 + 1] + r.out[k * 3 + 1] * h, z = r.p[k * 3 + 2] + r.out[k * 3 + 2] * h;
-        if (k > k0) L += Math.hypot(x - px, y - py, z - pz);
+        if (k) L += Math.hypot(x - px, y - py, z - pz);
         px = x; py = y; pz = z;
       }
       return L;
     };
-    const plan = [];
-    for (let c = 0; c < chunks; c++) {
-      const k0 = c * PER, k1 = k0 + PER;
-      const L = raw.map((r) => segLen(r, k0, k1, 0, 1)), target = Math.max(...L);
-      plan.push(raw.map((r, j) => {
-        if (target - L[j] < 1e-6) return { A: 0, humps: 1 };
-        // the fewest, gentlest waves that make up the difference: one wide hill if a low one will do, otherwise more
-        // and smaller waves (a long pipe on the inside of a sharp bend gets a wavy slide, never one giant loop)
-        let best = null;
-        for (let humps = 1; humps <= 12; humps++) {
-          let lo = 0, hi = 14;
-          if (segLen(r, k0, k1, hi, humps) < target) continue;
-          for (let it = 0; it < 50 && hi - lo > 1e-7; it++) { const m = (lo + hi) / 2; if (segLen(r, k0, k1, m, humps) < target) lo = m; else hi = m; }
-          if (!best || hi < best.A) best = { A: hi, humps };
-          if (hi <= BULGE_SOFT) break;
-        }
-        best = best || { A: 14, humps: 12 };
-        r.bump = Math.max(r.bump, best.A); return best;
-      }));
-    }
-    // 3) apply bulges, then resample each stretch by arc length at STEP track units
-    const SPC = CH / STEP, N = chunks * SPC + 1;
-    return raw.map((r, j) => {
-      const NRu = chunks * PER + 1, q = new Float64Array(NRu * 3);
-      for (let c = 0; c < chunks; c++) for (let k = c * PER; k <= (c + 1) * PER; k++) {
-        const { A, humps } = plan[c][j], h = bulge(A, humps, (k - c * PER) / PER);
+    const L0 = raw.map((r) => lenOf(r, 0, 1)), target = Math.max(...L0);
+    raw.forEach((r, j) => {
+      r.A = 0; r.waves = 1;
+      if (target - L0[j] < 1e-6) return;
+      for (let waves = Math.max(1, Math.round(L0[j] / SWELL)); waves < 200; waves++) {
+        let lo = 0, hi = SWELL_MAX;
+        if (lenOf(r, hi, waves) < target) continue;
+        for (let it = 0; it < 48 && hi - lo > 1e-6; it++) { const m = (lo + hi) / 2; if (lenOf(r, m, waves) < target) lo = m; else hi = m; }
+        r.A = hi; r.waves = waves; r.bump = hi; return;
+      }
+    });
+    // 3) apply the swells, then resample each pipe evenly by arc length: track distance s is the same fraction of
+    //    every pipe's (equal) length, so every ball also moves at the same speed along its own pipe
+    const N = Math.round((sEnd - S0) / STEP) + 1;
+    return raw.map((r) => {
+      const q = new Float64Array(NR * 3), acc = new Float64Array(NR);
+      for (let k = 0; k < NR; k++) {
+        const h = r.A ? bulge(r.A, r.waves, k / (NR - 1)) : 0;
         for (let d = 0; d < 3; d++) q[k * 3 + d] = r.p[k * 3 + d] + r.out[k * 3 + d] * h;
+        if (k) acc[k] = acc[k - 1] + Math.hypot(q[k * 3] - q[(k - 1) * 3], q[k * 3 + 1] - q[(k - 1) * 3 + 1], q[k * 3 + 2] - q[(k - 1) * 3 + 2]);
       }
-      const pos = new Float32Array(N * 3), len = new Float64Array(chunks);
-      for (let c = 0; c < chunks; c++) {
-        const k0 = c * PER, acc = [0];
-        for (let k = k0 + 1; k <= k0 + PER; k++) acc.push(acc[acc.length - 1] + Math.hypot(q[k * 3] - q[(k - 1) * 3], q[k * 3 + 1] - q[(k - 1) * 3 + 1], q[k * 3 + 2] - q[(k - 1) * 3 + 2]));
-        const total = acc[acc.length - 1]; len[c] = total;
-        let m = 0;
-        for (let i = 0; i < SPC; i++) {
-          const want = (i / SPC) * total;
-          while (m < PER - 1 && acc[m + 1] < want) m++;
-          const w = (want - acc[m]) / Math.max(1e-12, acc[m + 1] - acc[m]), a = (k0 + m) * 3, b = a + 3, o = (c * SPC + i) * 3;
-          pos[o] = q[a] + (q[b] - q[a]) * w; pos[o + 1] = q[a + 1] + (q[b + 1] - q[a + 1]) * w; pos[o + 2] = q[a + 2] + (q[b + 2] - q[a + 2]) * w;
-        }
+      const total = acc[NR - 1], pos = new Float32Array(N * 3);
+      let m = 0;
+      for (let i = 0; i < N; i++) {
+        const want = (i / (N - 1)) * total;
+        while (m < NR - 2 && acc[m + 1] < want) m++;
+        const w = clamp((want - acc[m]) / Math.max(1e-12, acc[m + 1] - acc[m]), 0, 1), a = m * 3, b = a + 3, o = i * 3;
+        pos[o] = q[a] + (q[b] - q[a]) * w; pos[o + 1] = q[a + 1] + (q[b + 1] - q[a + 1]) * w; pos[o + 2] = q[a + 2] + (q[b + 2] - q[a + 2]) * w;
       }
-      const e = (N - 1) * 3, last = (NRu - 1) * 3; pos[e] = q[last]; pos[e + 1] = q[last + 1]; pos[e + 2] = q[last + 2];
       const fr = frames(pos, N);
-      return { N, pos, side: fr.side, up: fr.up, len, bump: r.bump };
+      return { N, pos, side: fr.side, up: fr.up, total, bump: r.bump, waves: r.waves };
     });
   }
-  return { build, spine, spineFrame, S0, CH, STEP, rhoMin, GAP };
+  return { build, spine, spineFrame, S0, STEP, rhoMin, GAP };
 })();

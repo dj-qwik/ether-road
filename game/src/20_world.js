@@ -97,7 +97,7 @@ const WORLD = (() => {
     // Your own pipe can never be hidden. Pass 1 draws everything else (other pipes, their balls, the scenery); pass 2
     // clears depth and draws your pipe, its spikes and pickups and your ball (layer 1) on top. Your pipe's glass
     // walls let the others show through, dimmed.
-    camOther = new T.PerspectiveCamera(76, 1, 0.5, 900); camOther.layers.set(0); camera.layers.set(1);
+    camOther = new T.PerspectiveCamera(76, 1, 3, 900); // other pipes closer than 3 u to the camera aren't drawn (no streaks across the view) camOther.layers.set(0); camera.layers.set(1);
     composer = new T.EffectComposer(renderer);
     composer.addPass(new T.RenderPass(scene, camOther));
     const mine = new T.RenderPass(scene, camera); mine.clear = false; mine.clearDepth = true;
@@ -482,7 +482,7 @@ const WORLD = (() => {
     if (cam.phi == null || cam.subject !== rl) cam.phi = x;
     let dx = x - cam.phi; while (dx > SEGS / 2) dx -= SEGS; while (dx < -SEGS / 2) dx += SEGS; cam.phi += dx * k;
     cam.dist = lerp(cam.dist ?? 4.2, view.phase === 'done' ? 6.5 : 4.2, 1 - Math.exp(-dt * 2));
-    const e = tubeAt(rl, sNow - cam.dist, cam.phi, TUBE_R * 0.12), l = tubeAt(rl, sNow + 9, cam.phi, TUBE_R * 0.42);
+    const e = camPoint(rl, sNow - cam.dist, cam.phi, TUBE_R * 0.12, 5), l = camPoint(rl, sNow + 9, cam.phi, TUBE_R * 0.42, 8);
     if (cam.subject !== rl || view.snap) { cam.from = cam.subject && !view.snap ? { x: cam.pos.x, y: cam.pos.y, z: cam.pos.z, lx: cam.look.x, ly: cam.look.y, lz: cam.look.z } : null; cam.blend = 0; cam.subject = rl; }
     cam.blend = Math.min(1, (cam.blend ?? 1) + Math.max(dt, (now - (cam.lastNow || now))) * 1.8); cam.lastNow = now;
     const bl = cam.from ? smooth(cam.blend) : 1;
@@ -502,6 +502,15 @@ const WORLD = (() => {
     if (theme.shift) { const c = new T.Color().setHSL((now * 0.02) % 1, 0.7, 0.045, T.SRGBColorSpace); scene.fog.color.copy(c); scene.background.copy(c); }
     bloom.strength = 0.26 + (t > COLLAPSE_AT && view.phase === 'play' ? 0.1 : 0) + (view.phase === 'done' ? 0.12 : 0);
     render(dt);
+  }
+  // the camera rides a smoothed line through the pipe: each of its points (and its "up") is the average of the pipe
+  // over ±w units, so bends and swells are taken as one gentle sweep instead of every wiggle shaking the view
+  const CP = {};
+  function camPoint(rl, s, x, r, w) {
+    const o = { x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0 }; let n = 0;
+    for (let d = -w; d <= w; d += 1) { const f = tubeAt(rl, s + d, x, r, CP); o.x += f.x; o.y += f.y; o.z += f.z; o.nx += f.nx; o.ny += f.ny; o.nz += f.nz; n++; }
+    o.x /= n; o.y /= n; o.z /= n; const nl = Math.hypot(o.nx, o.ny, o.nz) || 1; o.nx /= nl; o.ny /= nl; o.nz /= nl;
+    return o;
   }
   // ── item effects: bursts (an expanding energy shell), EMPs (a shock ring racing up every pipe), cannon shots
   function itemFx(view, now) {
