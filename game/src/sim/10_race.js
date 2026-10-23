@@ -70,7 +70,7 @@ const FULL = (1 << SEGS) - 1;
 function gapMask(c, w) { let m = FULL; for (let k = 0; k < w; k++) m &= ~(1 << segWrap(c - ((w - 1) >> 1) + k)); return m; }
 const KIND = { spike: { len: 0.8 } };
 // ───── electrified plates ─────
-// A wide arc of the pipe wall that pulses with the music: live for 2 beats, dead for 2 (144 BPM, so 0.83 s each),
+// A wide arc of the pipe wall that pulses on a steady rhythm: live for 2 beats, dead for 2 (144 BPM, so 0.83 s each),
 // flickering for 0.3 s before it goes live. Touch it while it's live and you're out, exactly like spikes. It runs on
 // the race clock, so every racer at the game's speed meets it in the same state. Two kinds, 50/50:
 //   bluff — the plate lies across the safe line but is dead the whole time you pass (if you're on the game's pace):

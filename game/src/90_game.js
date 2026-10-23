@@ -79,7 +79,7 @@ function homeCard() {
         : NET.enabled() ? '<button class="btn primary big" id="goOnline">Race online</button>' : ''}
       <button class="btn big${cash || NET.enabled() ? ' ghost' : ' primary'}" id="goPractice">Practice</button>
     </div>
-    <div class="row"><button class="btn ghost skinbtn" id="goSkins"><img src="${SKINLAB.thumbnails(new THREE.Color('#22E6FF'))[mySkin()]}" alt="">Sphere: ${esc(SKINS[mySkin()].name)}</button>${LAB.unlocked() ? '<button class="btn ghost" id="goLab">Test lab</button>' : ''}</div>
+    <div class="row"><button class="btn ghost skinbtn" id="goSkins">${typeof THREE !== 'undefined' ? `<img src="${SKINLAB.thumbnails(new THREE.Color('#22E6FF'))[mySkin()]}" alt="">` : ''}Sphere: ${esc(SKINS[mySkin()].name)}</button>${LAB.unlocked() ? '<button class="btn ghost" id="goLab">Test lab</button>' : ''}</div>
     <div class="facts">
       <div><b>2–4</b><span>racers, one pipe each, braided together</span></div>
       <div><b>60 s</b><span>at most. The final collapse settles it</span></div>
@@ -109,7 +109,7 @@ function practiceCard() {
 }
 const HOWTO = [
   'Your ball rolls forward on its own. Slide left / right round the pipe wall (←/→, A/D, d-pad). Hold to keep sliding.',
-  'Red spikes kill. So do yellow electric plates while they are live: they pulse with the beat and flicker just before they switch on. Some are dead when you reach them, some are not.',
+  'Red spikes kill. So do yellow electric plates while they are live: they pulse on a steady rhythm and flicker just before they switch on. Some are dead when you reach them, some are not.',
   'Pickups come in small groups: roll over the one you want, the others vanish. Space / ✕ uses it: cannon (2 shots, blows up spikes), burst (slows rivals), EMP (knocks out balls ahead), ether boost (fast + invincible 3 s).',
   'Optional strips: cyan boost (faster), amber slow (more time). Still alive at 60 s? Furthest along wins.'];
 function introCard(seconds, online) {
@@ -118,6 +118,7 @@ function introCard(seconds, online) {
     <span class="label">${online ? 'Race starts soon' : 'Practice race'} · ${game.players.length} racers · 60 s cap</span>
     <h1 class="theme">${esc(A.name)}</h1>
     <ul class="howto">${HOWTO.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
+    ${MUSIC.raceSong ? `<span class="label">♪ ${esc(MUSIC.raceSong.title)}</span>` : ''}
     <div class="lineup">${game.players.map((p) => chip(p, p.i === game.me)).join('')}</div>
     <div class="row"><button class="btn primary" id="ready">${online ? 'Ready' : 'Go'}</button><span class="label">Starts in <span id="introLeft">${Math.ceil(seconds)}</span> s</span></div>
     <div class="bar"><div id="introFill"></div></div>

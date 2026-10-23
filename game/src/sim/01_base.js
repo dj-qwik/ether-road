@@ -3,7 +3,7 @@
 const DT = 1 / 60;                 // fixed 60 Hz simulation tick
 const RACE_SECONDS = 60;           // hard cap: the final collapse guarantees a result by then
 const RACE_TICKS = RACE_SECONDS * 60;
-const BEAT = 60 / 144;             // the soundtrack's beat (144 BPM)
+const BEAT = 60 / 144;             // the race's rhythm (144 BPM): electrified plates pulse on it
 
 // The pipe: every racer rides the inside wall of their own pipe, split into SEGS positions around it (like Tempest).
 // Position 0 is where everyone starts; +1 is one step to the right.

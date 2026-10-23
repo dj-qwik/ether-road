@@ -4,6 +4,7 @@
 //   dist/game.js            browser bundle: simulation + 3D renderer + audio + menus (plain script; three.js arrives as window.THREE)
 //   dist/etherroad.html     offline page (practice only) that loads ./vendor/three
 //   dist-web/index.html     page served by the game server, with online play switched on
+//   dist-web/music/…        the soundtrack (game/assets/music)
 //   dist-web/vendor/…       three.js r170 + the post-processing passes it uses (vendored in game/vendor)
 // Simulation code (src/sim/*) is wrapped in createSim(): inside it Math.random becomes a seeded RNG and
 // Math.sin/cos/atan2/atan/exp/hypot become DET_MATH, so every JS engine computes identical results.
@@ -75,6 +76,7 @@ const page = (online, prefix) => `<!doctype html>
 <body>
 ${head}
 ${online ? '<script>window.ER_ONLINE = true;</script>\n<script type="module" src="/wallet/wallet.js"></script>' : ''}
+<script>window.ER_ASSETS = ${JSON.stringify(prefix)};</script>
 ${THREE_LOADER(prefix)}
 <script>
 ${js}</script>
@@ -88,5 +90,7 @@ fs.writeFileSync(path.join(webDir, 'index.html'), page(true, '/'))
 // vendored three.js
 const V = path.join(ROOT, 'vendor')
 for (const dir of [path.join(outDir, 'vendor'), path.join(webDir, 'vendor')]) fs.cpSync(V, dir, { recursive: true })
+// the soundtrack (full songs for the menus + 66 s race cuts), in game/assets/music
+for (const dir of [path.join(outDir, 'music'), path.join(webDir, 'music')]) fs.cpSync(path.join(ROOT, 'assets', 'music'), dir, { recursive: true })
 for (const f of ['sim.cjs', 'game.js']) execFileSync(process.execPath, ['--check', path.join(outDir, f)], { stdio: 'inherit' })
-console.log(`built ${path.relative(ROOT, outDir)}: sim.cjs ${(sim.length / 1024) | 0} KB, game.js ${(js.length / 1024) | 0} KB; + dist-web/index.html + vendor; syntax ok`)
+console.log(`built ${path.relative(ROOT, outDir)}: sim.cjs ${(sim.length / 1024) | 0} KB, game.js ${(js.length / 1024) | 0} KB; + dist-web/index.html + vendor + music; syntax ok`)

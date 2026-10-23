@@ -37,7 +37,7 @@ path (Safe admin, KMS keys, co-signers on separate infrastructure, an audit) is 
 |---|---|
 | Control | Your ball rides the inside wall of a pipe with 16 positions round it. **← / → or A / D** step one position (67 ms per step; hold for 110 ms and it keeps sliding all the way round). **Space** fires the cannon or uses whatever you are holding. Controller: d-pad, left stick or L1/R1 step, **✕ (PlayStation) / A (Xbox)** uses. Touch: hold the left or right half of the screen, USE button for items. |
 | Speed | The game's, never the player's: 20 u/s at the start, +0.25 u/s per second, 35 u/s at the cap. Only strips you choose and items change it. |
-| Course | Built from the race seed (two committed random draws). One hazard: **red spikes** on the pipe wall: rings with one opening, twin rings with two, rows of spike clusters to weave through, and long spiral sleeves with a glowing channel that twists round the pipe. Openings tighten and jump further as the race goes on. **Electrified plates** (from 8 s until the final collapse, about six a race): a yellow arc of the wall (4–6 positions in the first half, 5–8 after) that pulses with the music, live for 2 beats and dead for 2 (0.83 s each), flickering for 0.3 s before it goes live. Live, it kills like spikes. Half are *bluffs* (lying across the safe line but dead the whole time a racer on the game's pace is on them) and half are *live* (covering where you are, live the whole time you'd pass: get off). They run on the race clock, so everyone on the game's pace meets them in the same state; a strip, a hit or ether boost puts you off the beat, so read the pulse. Every racer gets the same course in their own pipe. A flawless driver must be able to finish every course or it is rebuilt. |
+| Course | Built from the race seed (two committed random draws). One hazard: **red spikes** on the pipe wall: rings with one opening, twin rings with two, rows of spike clusters to weave through, and long spiral sleeves with a glowing channel that twists round the pipe. Openings tighten and jump further as the race goes on. **Electrified plates** (from 8 s until the final collapse, about six a race): a yellow arc of the wall (4–6 positions in the first half, 5–8 after) that pulses on a steady rhythm, live for 2 beats and dead for 2 (0.83 s each), flickering for 0.3 s before it goes live. Live, it kills like spikes. Half are *bluffs* (lying across the safe line but dead the whole time a racer on the game's pace is on them) and half are *live* (covering where you are, live the whole time you'd pass: get off). They run on the race clock, so everyone on the game's pace meets them in the same state; a strip, a hit or ether boost puts you off the beat, so read the pulse. Every racer gets the same course in their own pipe. A flawless driver must be able to finish every course or it is rebuilt. |
 | Pacing | The first half is a warm-up: wide openings, slow twists, small plates (about 7% of good players are out before 30 s). From 30 s the squeeze is on, and the **final collapse** at 48 s narrows the openings to one or two positions. First elimination typically around 42 s; most races are decided before the cap. Every trap leaves a way through: a flawless driver must be able to finish every course or it is rebuilt, a plate never covers more than half the pipe, and a live plate always leaves time to get off it. |
 | Tracks | Six, dealt from a shuffled deck: **Nebula Run**, **Ion Helix**, **Solar Canyon**, **Prism Cathedral**, **Vector Storm**, **Signal Ghost**. Each has its own pipe shapes, look and mix of spike patterns; the difficulty schedule is the same on all of them. |
 | Equal pipes | Every racer's pipe has its own curves, but all pipes are exactly as long as each other: a pipe that comes out shorter gets long, low swells (about one per 240 u), solved to match, and every pipe is spaced evenly by length, so equal track distance means equal pipe length everywhere and every ball moves at the same speed along its pipe. The pipes never touch (closest 5.9 u between centre lines; pipes are 4.4 u wide), and they're smooth: no pipe turns more than 15° in 4 u (actual worst 8.5°). The camera rides a smoothed line through your pipe on top of that. `tools/tracks.mjs` checks all of it. |
@@ -57,6 +57,15 @@ PLATES 5.8 per course (49% live, the rest bluffs) · 0 in the wrong state while 
 PICKUPS 200/200 courses ok · 6.3 caches per course · racers picked different items in 169/200 races
 ITEMS cannon, burst, EMP, ether boost all used and landing; ether boost: 30/30 never died while invincible
 ```
+
+## Soundtrack
+
+Four songs in `game/assets/music`: **Carnage Protocol**, **Crusher**, **GAME OVER**, **High Voltage**. Menus play them
+back to back. Each race gets one (dealt from a shuffled deck), as a 66 s race cut that starts 3 s before the song's
+high-energy section so it lands on GO. The neon pipes and the bloom pulse to the bass and drums of whatever is
+playing (a Web Audio analyser; it listens before the mute, so the pulse works with the sound off). The race cuts
+are made with ffmpeg from the originals (`-ss <drop − 3> -t 66`, fade out over the last 4 s, 160 kbps; full songs at
+128 kbps).
 
 ## Practice, test lab, controllers, skins
 
@@ -87,7 +96,7 @@ ITEMS cannon, burst, EMP, ether boost all used and landing; ether boost: 30/30 n
 
 ```
 game/src/sim/        deterministic race simulation (server, every browser, co-signers): course generator, pipe stepping, items, track-coordinate collisions, computer drivers
-game/src/*.js        browser client: 00 input + synthesized 144 BPM soundtrack, 20 three.js world, 90 menus + HUD, 95 online play, 96 real-money UI
+game/src/*.js        browser client: 00 input + soundtrack player (game/assets/music) + synthesized sound effects, 20 three.js world, 90 menus + HUD, 95 online play, 96 real-money UI
 game/vendor/         three.js r170 (MIT) + bloom passes, served from the game's own origin
 game/server/         Node + ws: matchmaking, the authoritative 60 Hz race, sign-in, cash lobbies, /status
 contracts/           EtherRoadEscrow (Foundry, 49 tests): stakes, 2-of-n co-signed results, 90/10 payout in one transaction

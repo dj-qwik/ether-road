@@ -22,7 +22,7 @@ const FREE_SIZES = [2, 3, 4]
 const log = (...a) => console.log(new Date().toISOString(), ...a)
 
 // ───────────── static web client
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json' }
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.webmanifest': 'application/manifest+json', '.mp3': 'audio/mpeg' }
 function serveStatic(req, res) {
   const url = new URL(req.url, 'http://x')
   if (url.pathname.startsWith('/api/')) return api(url, res)
@@ -44,7 +44,17 @@ function serveStatic(req, res) {
     'permissions-policy': 'camera=(), microphone=(), geolocation=()', vary: 'accept-encoding',
   }
   if (gz) { headers['content-encoding'] = 'gzip'; res.writeHead(200, headers); return res.end(gzipped(file)) }
-  res.writeHead(200, headers)
+  // byte ranges (browsers seek in audio this way)
+  const size = fs.statSync(file).size, range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '')
+  headers['accept-ranges'] = 'bytes'
+  if (ext === '.mp3') headers['cache-control'] = 'public, max-age=86400'
+  if (range && (range[1] || range[2])) {
+    let a = range[1] ? +range[1] : size - +range[2], b = range[1] && range[2] ? +range[2] : size - 1
+    if (!(a >= 0 && a <= b && b < size)) { res.writeHead(416, { 'content-range': `bytes */${size}` }); return res.end() }
+    res.writeHead(206, { ...headers, 'content-range': `bytes ${a}-${b}/${size}`, 'content-length': b - a + 1 })
+    return fs.createReadStream(file, { start: a, end: b }).pipe(res)
+  }
+  res.writeHead(200, { ...headers, 'content-length': size })
   fs.createReadStream(file).pipe(res)
 }
 const gzCache = new Map() // file → { mtime, buf }: compress each asset once
