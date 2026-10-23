@@ -61,8 +61,8 @@ function cachePlan(r) {
 }
 
 // ───── course difficulty (seconds) ─────
-const GAPT = [[2.6, 1.3], [12, 1.0], [25, 0.8], [32, 0.66], [38, 0.52], [48, 0.39], [53, 0.3], [57, 0.25], [60, 0.22]]; // time between spike patterns
-const WIDTH = [[2.6, 8], [10, 7], [20, 5.6], [30, 4.4], [38, 3.1], [44, 2.5], [48, 2], [51, 1.4], [54, 1], [60, 1]];     // opening width (positions)
+const GAPT = [[2.6, 1.3], [12, 1.0], [25, 0.8], [32, 0.66], [38, 0.52], [48, 0.38], [53, 0.27], [56, 0.21], [60, 0.17]]; // time between spike patterns
+const WIDTH = [[2.6, 8], [10, 7], [20, 5.6], [30, 4.4], [38, 3.1], [44, 2.4], [48, 1.8], [51, 1.2], [54, 1], [60, 1]];     // opening width (positions)
 const COLLAPSE_AT = 48; // "FINAL COLLAPSE": the pipe tightens until someone breaks
 const REACT = 0.1, STEP_SEC = STEP_TICKS * DT; // openings ahead are visible well in advance: planning absorbs most of the reaction time
 const maxShift = (dt, tt = 0) => clamp(Math.floor((dt * (tt >= COLLAPSE_AT ? 0.97 : 0.88) - (tt >= COLLAPSE_AT ? 0.05 : REACT)) / STEP_SEC), 0, SEGS / 2);
