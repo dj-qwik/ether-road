@@ -25,7 +25,7 @@ import { derivedAccount } from '../../services/settlement/src/keys.ts'
 
 const BYTECODE = JSON.parse(fs.readFileSync(new URL('../../packages/shared/src/escrowBytecode.json', import.meta.url), 'utf8')).bytecode
 const log = (...a) => console.log(new Date().toISOString(), '[cash]', ...a)
-export const RULES_VERSION = 'etherroad-rules-1'
+export const RULES_VERSION = 'etherroad-rules-2'
 export const ADMISSION_SECONDS = 600 // an unfilled lobby is cancelled (and refunded) after 10 minutes
 const CASH_SIZES = [2, 3, 4].filter((n) => LEGAL_MATCH_SIZES.includes(n))
 

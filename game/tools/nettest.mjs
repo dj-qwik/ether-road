@@ -48,17 +48,17 @@ function racer(name) {
     const F = P.F, ok = !F.desync && F.R.winner && F.R.winner.i === m.w && F.R.hash() === m.h
     // latency compensation: how many taps landed on exactly the tick they were stamped with
     const j = F.R.active.findIndex((b) => b.i === P.me), applied = []
-    F.frames.forEach((fr, k) => { if (fr[0][j] & 1) applied.push(k + 1) })
+    F.frames.forEach((fr, k) => { if (fr[0][j] & 3) applied.push(k + 1) })
     const sent = P.sent.filter((k) => k <= F.R.tick)
     for (const k of sent) { if (applied.includes(k)) results.onTime = (results.onTime || 0) + 1; else results.late++ }
     if (ok) results.agree++; else results.desyncs.push(`${name}: local winner ${F.R?.winner?.i} server ${m.w} desync=${F.desync}`)
     P.done = true
   }
-  // tap every 0.15–0.5 s, stamped with the race tick on the (shared) clock, like the browser does
+  // step left or right (and now and then use an item) every 0.15–0.5 s, stamped with the race tick on the (shared) clock, like the browser does
   P.loop = setInterval(() => {
     if (!P.at || P.done) return
     const k = Math.floor((Date.now() - P.at) / TICK) + 1
-    if (k >= P.next) { send({ t: 'tap', k }); P.sent.push(k); results.taps++; P.next = k + 9 + Math.floor(Math.random() * 22) }
+    if (k >= P.next) { send({ t: 'in', k, a: Math.random() < 0.5 ? 'L' : 'R' }); if (Math.random() < 0.15) send({ t: 'in', k, a: 'U' }); P.sent.push(k); results.taps++; P.next = k + 9 + Math.floor(Math.random() * 22) }
   }, 8)
   P.drop = () => { P.ws.terminate(); setTimeout(connect, 1200) }
   connect()

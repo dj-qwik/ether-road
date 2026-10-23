@@ -175,6 +175,18 @@ kbd { font: 700 .78rem var(--body); background: rgba(255,255,255,.08); border: 1
 #callout span { display: block; margin-top: 6px; font: 600 clamp(.95rem, 2.4vw, 1.2rem) var(--body); color: var(--text); text-shadow: 0 2px 8px #000; }
 #callout.pop b { animation: cpop .5s cubic-bezier(.2,1.6,.4,1) both; }
 @keyframes cpop { from { transform: scale(1.6); opacity: 0; } to { transform: none; opacity: 1; } }
+/* held item: bottom-left, out of the way of the pipe ahead */
+#hItem { position: absolute; left: 0; bottom: 6px; display: flex; align-items: center; gap: 10px; padding: 6px 14px 6px 6px; border-radius: 14px; background: rgba(4,3,12,.62); border: 1px solid var(--line); min-width: 150px; transition: border-color .2s, box-shadow .2s; }
+#hItem .ic { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; font: 900 1.35rem/1 var(--display); color: var(--c, #555); background: rgba(255,255,255,.04); border: 1px dashed rgba(255,255,255,.18); }
+#hItem.has { border-color: var(--c); box-shadow: 0 0 18px -4px var(--c); }
+#hItem.has .ic { border: 1px solid var(--c); text-shadow: 0 0 10px var(--c); }
+#hItem b { display: block; font: 800 .95rem var(--body); color: var(--c, var(--muted)); }
+#hItem small { display: block; font-size: .76rem; color: var(--muted); font-weight: 600; }
+#hItem .ammo { display: inline-flex; gap: 4px; margin-left: 4px; vertical-align: middle; }
+#hItem .ammo i { width: 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 6px var(--c); }
+#useBtn { position: absolute; right: 4px; bottom: 30px; width: 92px; height: 92px; border-radius: 50%; border: 2px solid var(--c, rgba(255,255,255,.25)); background: rgba(4,3,12,.6); color: var(--c, var(--muted)); font: 900 1rem var(--display); pointer-events: auto; touch-action: none; display: none; }
+body.touch #useBtn { display: block; }
+#useBtn.has { box-shadow: 0 0 22px -4px var(--c); }
 #net { position: absolute; right: 0; bottom: 0; font-size: .78rem; color: var(--muted); background: rgba(4,3,12,.6); border-radius: 999px; padding: 3px 10px; }
 #flash { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(circle at 50% 60%, transparent 40%, rgba(255,46,91,.35)); opacity: 0; transition: opacity .25s; }
 #flash.on { opacity: 1; transition: none; }
@@ -196,6 +208,8 @@ kbd { font: 700 .78rem var(--body); background: rgba(255,255,255,.08); border: 1
       <div class="clock" id="hClock"><svg viewBox="0 0 60 60" aria-hidden="true"><circle cx="30" cy="30" r="26" fill="none" stroke="rgba(255,255,255,.1)" stroke-width="4"/><circle id="hRing" cx="30" cy="30" r="26" fill="none" stroke="#22e6ff" stroke-width="4" stroke-linecap="round" stroke-dasharray="163.4" stroke-dashoffset="0"/></svg><div><b id="hTime">60</b><small id="hPhase">Race</small></div></div>
       <div class="field-l" id="hField"></div>
       <div id="banner" hidden></div>
+      <div id="hItem"><div class="ic">·</div><div><b>No item</b><small>Roll over a pickup</small></div></div>
+      <button id="useBtn" aria-label="Use item">USE</button>
       <div id="net" hidden></div>
     </div>
     <div id="callout"></div>

@@ -1,14 +1,14 @@
 // ───────────────────────── ONLINE PLAY ─────────────────────────
 // The server runs every online race. It simulates each tick a fixed delay (D ticks, ~150 ms) after the tick's
 // moment on the shared clock, so a tap stamped with the tick you were seeing still arrives in time and is applied
-// on exactly that tick (bounded latency compensation: taps later than D are applied on the next tick).
+// on exactly that tick (bounded latency compensation: actions later than D are applied on the next tick).
 // This browser replays the server's confirmed stream with the same deterministic simulation, and draws your own
-// sphere AHEAD of it: confirmed state + your unconfirmed taps, re-predicted every frame. Everyone else is shown
+// sphere AHEAD of it: confirmed state + your unconfirmed steps, re-predicted every frame. Everyone else is shown
 // as confirmed. Results always come from the confirmed simulation.
 const NET = (() => {
   const N = {
     ws: null, status: 'off', token: store.get('er_token'), name: store.get('er_name') || '', rtt: 0, off: 0, offBest: 1e9, F: null,
-    lobby: null, end: null, lastP: -1, backoff: 0, wanted: false, queueSize: 4, err: '', at: 0, D: 9, taps: [], confirmed: 0, shown: false,
+    lobby: null, end: null, lastP: -1, backoff: 0, wanted: false, queueSize: 4, err: '', at: 0, D: 9, acts: [], confirmed: 0, shown: false,
   };
   const enabled = () => typeof ONLINE !== 'undefined' && ONLINE && location.protocol.startsWith('http');
   const send = (o) => { if (N.ws && N.ws.readyState === 1) N.ws.send(JSON.stringify(o)); };
@@ -64,12 +64,12 @@ const NET = (() => {
     game.mode = 'online'; game.screen = 'match'; game.size = m.size; game.me = m.you;
     game.players = m.seats.map((s) => ({ i: s.i, name: s.i === m.you ? 'You' : s.name, human: s.i === m.you, bot: s.bot }));
     N.F = createFollower({ createSim, me: m.you, onDesync: (why) => { console.warn('desync', why); send({ t: 'resync' }); } });
-    N.taps = []; N.confirmed = 0; N.end = null; N.shown = false;
+    N.acts = []; N.confirmed = 0; N.end = null; N.shown = false;
   }
   const withNames = (m) => ({ ...m, players: m.players.map((p) => ({ ...p, name: p.i === game.me ? 'You' : p.name })) });
   function round(m) {
     if (!N.F) return;
-    N.end = null; N.shown = false; N.over = false; N.taps = []; N.confirmed = 0; N.stripSeen = new Set();
+    N.end = null; N.shown = false; N.over = false; N.acts = []; N.confirmed = 0; N.stripSeen = new Set();
     const R = N.F.round(withNames(m));
     game.R = R; game.key = m.key; game.outSeen = new Set(); game.flipTick = 0;
     WORLD.setRace(R, game.me, m.key);
@@ -79,7 +79,7 @@ const NET = (() => {
   }
   function countdown(m) {
     N.at = m.at; if (m.D) N.D = m.D;
-    showOverlay(''); game.phase = 'countdown'; game.lastCount = 0; INPUT.taps.length = 0; INPUT.enabled = true;
+    showOverlay(''); game.phase = 'countdown'; game.lastCount = 0; INPUT.acts.length = 0; INPUT.enabled = true;
     musicRace((N.at - serverNow()) / 1000);
   }
   function resync(m) {
@@ -88,41 +88,42 @@ const NET = (() => {
     const r = N.F.sync({ ...m, round: m.round && withNames(m.round) });
     if (!r) return;
     game.R = r; game.key = m.round.key; WORLD.setRace(r, game.me, m.round.key);
-    N.at = m.at || N.at; N.confirmed = countMine(); N.taps = N.taps.slice(0, N.confirmed);
+    N.at = m.at || N.at; N.confirmed = countMine(); N.acts = N.acts.slice(0, N.confirmed);
     if (m.state === 'intro') { game.phase = 'intro'; game.introUntil = performance.now() + m.msLeft; showOverlay(introCard(m.msLeft / 1000, true)); }
     else { showOverlay(''); $('#hud').hidden = false; document.body.classList.add('playing'); game.phase = m.state === 'count' ? 'countdown' : m.state === 'play' ? 'play' : 'done'; INPUT.enabled = game.phase !== 'done'; if (m.end) N.end = m.end; }
   }
-  // how many of my taps the confirmed stream has applied so far
-  function countMine() { if (!N.F || !N.F.R) return 0; const j = N.F.R.active.findIndex((b) => b.i === game.me); if (j < 0) return 0; let c = 0; for (let k = 0; k < N.F.next; k++) if (N.F.frames[k][0][j] & TAP) c++; return c; }
+  // how many of my actions the confirmed stream has applied so far (each action is one bit on one tick)
+  const bitsOf = (p) => (p & 1) + ((p >> 1) & 1) + ((p >> 2) & 1);
+  function countMine() { if (!N.F || !N.F.R) return 0; const j = N.F.R.active.findIndex((b) => b.i === game.me); if (j < 0) return 0; let c = 0; for (let k = 0; k < N.F.next; k++) c += bitsOf(N.F.frames[k][0][j]); return c; }
   // apply every frame that has arrived: the confirmed world is never held back for smoothness (we draw ahead of it)
   function applyFrames() {
     const F = N.F, R = F.R; if (!R) return;
     const j = R.active.findIndex((b) => b.i === game.me);
     while (F.next < F.frames.length && !F.desync) {
       const row = F.frames[F.next][0];
-      if (j >= 0 && (row[j] & TAP)) N.confirmed++;
+      if (j >= 0) N.confirmed += bitsOf(row[j]);
       stepWithFx(() => F.step(1));
       if (R.winner) break;
     }
   }
-  // ── prediction of my own sphere from the confirmed state + my unconfirmed taps
+  // ── prediction of my own sphere from the confirmed state + my unconfirmed steps (items are left to the server)
   const P = { b: null };
   function predictMe(R, tickNow) {
     const me = R.spheres.find((b) => b.i === game.me); if (!me || !R.active.includes(me)) return null;
-    const b = { mirror: me.mirror, target: me.target, from: me.from, cl: me.cl, swapT: me.swapT, buf: me.buf, lastTap: me.lastTap, taps: me.taps, alive: me.alive, deathTick: me.deathTick, shield: me.shield, immuneS: me.immuneS, s: me.s, v: me.v, fxKind: me.fxKind, fxTick: me.fxTick, strips: me.strips.slice() };
+    const b = { seg: me.seg, from: me.from, cl: me.cl, stepT: me.stepT, dir: me.dir, q: me.q.slice(), taps: me.taps, alive: me.alive, deathTick: me.deathTick, shield: me.shield,
+      immuneUntil: me.immuneUntil, s: me.s, v: me.v, fxKind: me.fxKind, fxTick: me.fxTick, strips: me.strips.slice(), gone: me.gone, slowUntil: me.slowUntil, empUntil: me.empUntil,
+      empStart: me.empStart, etherUntil: me.etherUntil };
     if (!b.alive || R.winner) return b;
-    const pend = N.taps.slice(N.confirmed), H = R.course.blocks;
+    const pend = N.acts.slice(N.confirmed);
     let pi = 0;
     for (let k = R.tick + 1; k <= Math.min(tickNow, RACE_TICKS); k++) {
-      while (pi < pend.length && Math.max(pend[pi], R.tick + 1) <= k) { SIM0.sphereTap(b, k); pi++; }
-      SIM0.advanceSwap(b); SIM0.moveSphere(b, R.course, k);
-      const s = b.s, t = k * DT;
-      for (let q = SIM0.firstBlock(H, s); q < H.length; q++) {
-        const h = H[q]; if (h.s0 - SPHERE_R >= s) break;
-        if (h.s1 + SPHERE_R <= s || (h.lane ^ b.mirror) !== b.cl || s < b.immuneS) continue;
-        if (SIM0.hazardOn(h, t)) { if (b.shield) { b.shield = 0; b.immuneS = h.s1 + SPHERE_R + 0.5; break; } b.alive = false; b.deathTick = k; break; }
+      let used = 0;
+      while (pi < pend.length && Math.max(pend[pi][0], R.tick + 1) <= k) { const bit = pend[pi][1]; if (bit === IN_USE ? used & IN_USE : used & (IN_L | IN_R)) break; used |= bit; pi++; }
+      if (k > b.empUntil) { if (used & IN_L) SIM0.pushStep(b, -1); if (used & IN_R) SIM0.pushStep(b, 1); }
+      SIM0.moveSphere(b, R.course, k);
+      if (k > b.empUntil && k > b.etherUntil && k > b.immuneUntil && SIM0.spikeHit(R.course, b)) {
+        if (b.shield) { b.shield = 0; b.immuneUntil = k + 36; } else { b.alive = false; b.deathTick = k; break; }
       }
-      if (!b.alive) break;
     }
     return b;
   }
@@ -136,13 +137,13 @@ const NET = (() => {
       return;
     }
     if (!R) return;
-    // taps: stamp each with the tick it was made on (the world tick this player was looking at) and send it
+    // actions: stamp each with the tick it was made on (the world tick this player was looking at) and send it
     const t = (serverNow() - N.at) / 1000;
-    while (INPUT.taps.length) {
-      const tp = INPUT.taps.shift(), k = Math.floor((Date.now() + N.off - (performance.now() - tp) - N.at) / TICK_MS) + 1;
+    while (INPUT.acts.length) {
+      const [tp, a] = INPUT.acts.shift(), k = Math.floor((Date.now() + N.off - (performance.now() - tp) - N.at) / TICK_MS) + 1;
       if (k < 1 || game.phase === 'done') continue;
       const me = R.spheres.find((b) => b.i === game.me); if (!me || !me.alive || !R.active.includes(me)) continue;
-      N.taps.push(k); send({ t: 'tap', k });
+      N.acts.push([k, a === 'L' ? IN_L : a === 'R' ? IN_R : IN_USE]); send({ t: 'in', k, a });
     }
     if (game.phase === 'countdown') {
       const n = Math.ceil(-t);
@@ -152,9 +153,9 @@ const NET = (() => {
     if (game.phase === 'play') {
       const tickNow = Math.floor(t * 60);
       const pb = predictMe(R, tickNow);
-      if (pb && P.b && P.b.target !== pb.target && pb.alive) SFX.lane(pb.target);
+      if (pb && P.b && pb.taps !== P.b.taps && pb.alive) SFX.lane(pb.q.length ? pb.q[pb.q.length - 1] > 0 : pb.dir > 0);
       if (pb && P.b && pb.fxTick !== P.b.fxTick && pb.alive) stripFx(pb.fxKind);
-      if (pb && P.b && P.b.alive && !pb.alive) { SFX.crash(true); padRumble(1, 380); $('#flash').classList.add('on'); setTimeout(() => $('#flash').classList.remove('on'), 60); WORLD.shake(1.2); }
+      if (pb && P.b && P.b.alive && !pb.alive) myCrash();
       P.b = pb;
       if (R.winner && !N.over) { N.over = true; roundOver(); }
     }
@@ -184,7 +185,7 @@ const NET = (() => {
         if (b.i === game.me && pb) return { i: b.i, x: sphereX(pb, frac), s: (pb.alive ? pb.s + pb.v * DT * frac : pb.s) + pre, v: pb.alive ? pb.v : 0, alive: pb.alive, winner: R.winner === b, ...powersOf(b, R) };
         return { i: b.i, x: sphereX(b, 0), s: sOf(b), v: b.alive ? b.v : 0, alive: b.alive, winner: R.winner === b, ...powersOf(b, R) };
       });
-    return { t: tDraw, phase: game.phase, follow, spheres, s: (spheres.find((x) => x.i === follow) || spheres[0]).s };
+    return { t: tDraw, phase: game.phase, follow, spheres, tick: R.tick + (game.phase === 'play' ? Math.max(0, tickNow - R.tick + frac) : 0), s: (spheres.find((x) => x.i === follow) || spheres[0]).s };
   }
   // ── screens
   function setupCard() {

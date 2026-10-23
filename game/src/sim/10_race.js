@@ -1,192 +1,257 @@
 // ───────────────────────── THE RACE: course generation + the one step function server and browsers run ─────────────────────────
-// Everything that decides a result lives here and is deterministic: a course is built from two seeded random
-// draws, every sphere's lane comes only from its taps, and collisions are tested in track coordinates
-// (distance along the road × lane), never against meshes. The 3D world is drawn from this data.
+// Everything that decides a result lives here and is deterministic. Each racer rides the inside of a pipe split into
+// SEGS positions around its wall; collisions are tested in track coordinates (distance along the pipe × position),
+// never against meshes. The 3D world is drawn from this data.
 
-// ───── speed strips ─────
-// Two boost strips and two slow strips per course, each covering ONE lane, at the same track position on every
-// racer's road (mirrored lane, like everything else). They sit in a gap between spikes in the lane you are NOT
-// riding at that moment, so you only hit one if you choose to: two quick taps in, two out. Never under spikes.
-//   boost — ×1.4 speed for 2.2 s: you gain distance, but the spikes come at you faster
-//   slow  — ×0.65 speed for 2.2 s: more time to react, but you lose distance
-// Distance travelled is the first tie-break if more than one racer is still alive at the 60 s cap.
-const STRIP = { boost: { mul: 1.4 }, slow: { mul: 0.65 }, hold: 2.2, rampIn: 0.25, rampOut: 0.4, len: 4 };
+// ───── the base timeline: how far a racer at base speed has travelled at every tick ─────
+const S_TICKS = RACE_TICKS + 1800;
+const S_TABLE = (() => { const a = new Float64Array(S_TICKS + 1); for (let k = 1; k <= S_TICKS; k++) a[k] = a[k - 1] + speedAt((k - 1) * DT) * DT; return a; })();
+const sAtTick = (k) => S_TABLE[Math.max(0, Math.min(S_TICKS, k))];
+function sAtT(t) { const x = t / DT, k = Math.floor(x); return k >= S_TICKS ? S_TABLE[S_TICKS] : k < 0 ? 0 : S_TABLE[k] + (S_TABLE[k + 1] - S_TABLE[k]) * (x - k); }
+function tickAtS(x) { let lo = 0, hi = S_TICKS; while (lo < hi) { const m = (lo + hi) >> 1; if (S_TABLE[m] >= x) hi = m; else lo = m + 1; } return lo; }
+function tOfS(x) { const k = tickAtS(x); if (k <= 0) return 0; const a = S_TABLE[k - 1], b = S_TABLE[k]; return (k - 1 + (b > a ? (x - a) / (b - a) : 0)) * DT; }
+const TL0 = { sAtTick, sAtT, tickAtS, tOfS, speedAtT: speedAt };
+
+// ───── speed strips (optional pads on one position) ─────
+//   boost — ×1.4 for 2.2 s: more distance, less time to react · slow — ×0.65 for 2.2 s: more time, less distance
+const STRIP = { boost: { mul: 1.4 }, slow: { mul: 0.65 }, hold: 2.2, rampIn: 0.25, rampOut: 0.4, len: 5 };
 function fxMul(kind, d) { // d = seconds since the strip was hit
   if (!kind || d < 0 || d > STRIP.rampIn + STRIP.hold + STRIP.rampOut) return 1;
   const k = d < STRIP.rampIn ? d / STRIP.rampIn : d < STRIP.rampIn + STRIP.hold ? 1 : 1 - (d - STRIP.rampIn - STRIP.hold) / STRIP.rampOut;
   return 1 + (STRIP[kind].mul - 1) * k;
 }
-function stripMul() { return 1; }
-const S_TICKS = RACE_TICKS + 1800;
-function makeTimeline(strips = []) {
-  const S = new Float64Array(S_TICKS + 1);
-  for (let k = 1; k <= S_TICKS; k++) { const t = (k - 1) * DT; S[k] = S[k - 1] + speedAt(t) * DT; }
-  const sAtTick = (k) => S[Math.max(0, Math.min(S_TICKS, k))];
-  const sAtT = (t) => { const x = t / DT, k = Math.floor(x); return k >= S_TICKS ? S[S_TICKS] : k < 0 ? 0 : S[k] + (S[k + 1] - S[k]) * (x - k); };
-  const tickAtS = (x) => { let lo = 0, hi = S_TICKS; while (lo < hi) { const m = (lo + hi) >> 1; if (S[m] >= x) hi = m; else lo = m + 1; } return lo; }; // first tick with s ≥ x
-  const tOfS = (x) => { const k = tickAtS(x); if (k <= 0) return 0; const a = S[k - 1], b = S[k]; return (k - 1 + (b > a ? (x - a) / (b - a) : 0)) * DT; };
-  const speedAtT = (t) => speedAt(t);
-  return { strips, sAtTick, sAtT, tickAtS, tOfS, speedAtT };
-}
-const TL0 = makeTimeline([]); // the base speed ramp, the same for every course
-const sAtTick = TL0.sAtTick, sAtT = TL0.sAtT, tickAtS = TL0.tickAtS, tOfS = TL0.tOfS;
 
-// Is a hazard solid at time t? Periodic ones (gates, crushers) move on the music's beat; the rest switch on/off once.
-function hazardOn(h, t) {
-  if (h.per) { let f = (t - h.ph) / h.per; f -= Math.floor(f); return f < h.duty; }
-  return t >= h.on && t < h.off;
-}
-// Solid at any moment while a sphere passes it (the sphere covers [s0 − r, s1 + r]), with a little margin.
-function hazardLive(h, m, tl = TL0) {
-  const a = tl.tOfS(h.s0 - SPHERE_R) - m, b = tl.tOfS(h.s1 + SPHERE_R) + m;
-  for (let k = 0; k <= 8; k++) if (hazardOn(h, a + (b - a) * k / 8)) return true;
-  return false;
+// ───── pickups ─────
+// Instant (work the moment you roll over them):
+//   shield — blocks the next hit of anything: spikes, a burst or an EMP (one hit, then gone)
+//   magnet — for 4 s, orbs up to 3 positions either side are yours · double — for 6 s, orbs count twice
+// Held (one at a time; press Use to fire; rolling over another held pickup swaps it in):
+//   cannon — 2 shots: each destroys the next group of spikes in your position (for you only)
+//   burst  — an energy shell spreads from you in every direction; every ball it reaches is slowed to 60% for 2 s
+//   emp    — a shockwave runs ahead up every pipe; each ball ahead of you it reaches is lifted off the track for
+//            1.5 s: it can't steer, slows to 50%, can't be hit, and always comes down on a free position
+//   ether  — ether boost: a bit above top speed and invincible for 3 s (spikes, bursts and EMPs pass through you)
+const POWERS = {
+  shield: {}, magnet: { ticks: 240 }, double: { ticks: 360 },
+  cannon: { held: 1, ammo: 2 }, burst: { held: 1 }, emp: { held: 1 }, ether: { held: 1, ticks: 180, speed: 40 },
+};
+const ITEM_CODE = { cannon: 1, burst: 2, emp: 3, ether: 4 };
+const SLOW_FX = { mul: 0.6, ticks: 120 }, EMP_FX = { mul: 0.5, ticks: 90 };
+const WAVE_SPEED = 130, EMP_SPEED = 140, SHOT_SPEED = 170, SHOT_RANGE = 80, USE_GAP = 8;
+// Speed strips: two boost and two slow per course, at times nudged ±1.5 s at random.
+const STRIP_PLAN = [[12, 'boost'], [18.5, 'slow'], [28.5, 'boost'], [38, 'slow']];
+// Pickups come in CACHES: 2–3 different items side by side round the pipe, off the safe line. Roll over the one you
+// want and the rest of that cache is gone for you, so racers end up carrying different things by choice. Which items,
+// how many caches and when they come up are drawn at random from the course seed; every racer meets the same caches
+// at the same spots, so nobody is dealt a better hand.
+const CACHE_POOL = [['cannon', 3], ['burst', 2], ['emp', 2], ['ether', 2], ['shield', 2], ['magnet', 1.5], ['double', 1.5]];
+const CACHE_FIRST = [6.5, 9], CACHE_GAP = [5, 8], CACHE_LAST = 46, CACHE_SPACING = 2; // seconds; positions between items
+function cachePlan(r) {
+  const out = [];
+  for (let t = lerp(CACHE_FIRST[0], CACHE_FIRST[1], r()); t < CACHE_LAST; t += lerp(CACHE_GAP[0], CACHE_GAP[1], r())) {
+    const n = r() < 0.45 ? 3 : 2, items = [], pool = CACHE_POOL.slice();
+    while (items.length < n) {
+      let x = r() * pool.reduce((a, [, w]) => a + w, 0), k = 0;
+      for (; k < pool.length - 1; k++) if ((x -= pool[k][1]) <= 0) break;
+      items.push(pool[k][0]); pool.splice(k, 1);
+    }
+    out.push([t, 'cache', items]);
+  }
+  return out;
 }
 
-// How hard each moment is (seconds): gap between hazards, smallest switch window, chance a hazard flips lanes.
-const GAP = [[2.6, 0.9], [12, 0.62], [26, 0.46], [40, 0.36], [50, 0.29], [60, 0.23]];
-const WMIN = [[2.6, 0.4], [12, 0.26], [24, 0.17], [36, 0.13], [46, 0.1], [52, 0.085], [60, 0.05]];
-const FLIP = [[0, 0.6], [14, 0.68], [30, 0.74], [45, 0.84], [60, 0.94]]; // lots of back and forth
-// The switch window a flip is tightened to (seconds; ×0.85–1.5): this is where precision starts to matter.
-const WTARGET = [[2.6, 0.55], [12, 0.32], [24, 0.2], [36, 0.15], [46, 0.12], [52, 0.095], [57, 0.072], [60, 0.055]];
-const TIGHTEN = [[2.6, 0.4], [12, 0.75], [30, 0.9], [44, 1]];
-const COLLAPSE_AT = 48; // "FINAL COLLAPSE": the road tightens until someone breaks
-// ONE hazard: red spikes. If it's red, it's solid, always. A long stretch is just a longer row of spikes.
-const KIND = { spike: { len: 1.0 } };
-// Power-ups. Each sits at the same track position for every racer (mirrored lane, like every hazard), in the
-// risky lane between two hazards, so taking it costs two quick taps. Effects are fixed, never random:
-//   shield  — the next spikes you touch are passed through instead (one hit, then gone)
-//   magnet  — for 4 s, orbs in BOTH lanes are yours
-//   double  — for 6 s, orbs count twice
-const POWERS = { shield: { ticks: 0 }, magnet: { ticks: 240 }, double: { ticks: 360 } };
-const POWER_PLAN = [[11, 'magnet'], [14, 'boost'], [19, 'slow'], [24, 'shield'], [29, 'boost'], [33, 'double'], [37, 'slow'], [42, 'magnet']];
+// ───── course difficulty (seconds) ─────
+const GAPT = [[2.6, 1.3], [12, 0.95], [25, 0.72], [38, 0.56], [48, 0.44], [53, 0.34], [57, 0.28], [60, 0.24]]; // time between spike patterns
+const WIDTH = [[2.6, 8], [10, 6.2], [20, 4.7], [32, 3.6], [42, 2.9], [48, 2.3], [51, 1.6], [54, 1], [60, 1]];     // opening width (positions)
+const COLLAPSE_AT = 48; // "FINAL COLLAPSE": the pipe tightens until someone breaks
+const REACT = 0.1, STEP_SEC = STEP_TICKS * DT; // openings ahead are visible well in advance: planning absorbs most of the reaction time
+const maxShift = (dt, tt = 0) => clamp(Math.floor((dt * (tt >= COLLAPSE_AT ? 0.97 : 0.88) - (tt >= COLLAPSE_AT ? 0.05 : REACT)) / STEP_SEC), 0, SEGS / 2);
+const FULL = (1 << SEGS) - 1;
+function gapMask(c, w) { let m = FULL; for (let k = 0; k < w; k++) m &= ~(1 << segWrap(c - ((w - 1) >> 1) + k)); return m; }
+const KIND = { spike: { len: 0.8 } };
 
 /**
  * Build a course from a seed string. Pure function of the seed: the server and every browser build the same one.
- * Returns { blocks (sorted by s0), orbs, startLane, layout, end } in BASE lanes; each sphere sees it mirrored
- * (lane ^ mirror), which makes every sphere's road exactly equally hard.
+ * Returns { blocks: spike groups sorted by s0 ({ id, pat, kind, s0, s1, mask }), orbs, strips, path, layout, end }.
+ * Every racer gets this exact course in their own pipe.
  */
-function buildCourse(seed, trackKey, opts = {}) {
+function buildCourse(seed, trackKey) {
   const track = TRACKS[trackKey] || TRACKS.nebula;
   const rng = makeRng('course:' + track.key + ':' + seed), r = () => rng();
-  // power-ups and speed strips come up at planned moments (strips nudged by up to ±1.5 s at random)
-  const plan = POWER_PLAN.map(([at, kind]) => [STRIP[kind] ? at + (r() - 0.5) * 3 : at, kind]).sort((a, b) => a[0] - b[0]); let pid = 0;
-  const strips = [];
-  const tl = TL0, { sAtT, tOfS } = tl, speedAt = tl.speedAtT;
-  const blocks = [], orbs = [];
-  let id = 0, prevB = -1, prevEnd = -1e9, prevBlock = null, t = 2.6, first = true;
-  const occ = (len) => (len + 2 * SPHERE_R); // road length a block + the sphere cover
-  const mk = (lane, s0, s1) => { const h = { id: id++, kind: 'spike', lane, s0, s1, tA: tOfS(s0 - SPHERE_R), tB: tOfS(s1 + SPHERE_R), on: -1e9, off: 1e9, per: 0, ph: 0, duty: 0, decoy: false }; blocks.push(h); return h; };
-  while (t < RACE_SECONDS + 4) { // a little past the cap: boosted racers get there early
-    const v = speedAt(t);
-    // a power-up is due: hold the lane and leave a gap long enough to dip into the other lane for it
-    const powerDue = !first && plan.length && t >= plan[0][0];
-    const B = prevB < 0 ? (r() < 0.5 ? 0 : 1) : powerDue ? prevB : r() < pwl(FLIP, t) ? 1 - prevB : prevB;
-    let tm = t + occ(1) / 2 / v;
-    if (powerDue) tm = Math.max(tm, tOfS(prevEnd + 2 * SPHERE_R + (STRIP[plan[0][1]] ? 0.78 : 0.62) * v) + occ(1) / 2 / v);
-    let s0 = sAtT(tm) - occ(1) / 2 + SPHERE_R, s1 = s0 + 1;
-    // a lane flip needs a window to switch in: push the spikes back until there is one
-    if (prevB >= 0 && B !== prevB) {
-      const need = pwl(WMIN, tm) * speedAt(tm), have = s0 - prevEnd - 2 * SPHERE_R;
-      if (have < need) { s0 += need - have; s1 = s0 + 1; }
-      else if (r() < pwl(TIGHTEN, tm)) {
-        // tighten: the previous lane's spikes run on until just before these, leaving a narrow window
-        const w = Math.max(need, pwl(WTARGET, tm) * (0.85 + 0.65 * r()) * speedAt(tm)), end = s0 - 2 * SPHERE_R - w;
-        if (end > prevEnd + 0.6 && prevBlock && prevBlock.s1 >= prevEnd - 1e-9) {
-          prevBlock.s1 = end; prevBlock.tB = tOfS(end + SPHERE_R);
-          prevEnd = end;
+  const plan = STRIP_PLAN.map(([at, kind]) => [at + (r() - 0.5) * 3, kind]).concat(cachePlan(r)).sort((a, b) => a[0] - b[0]);
+  let caches = 0;
+  const blocks = [], orbs = [], strips = [], path = [];
+  let id = 0, pat = 0, c = 0, t = 1.2, lastDir = r() < 0.5 ? 1 : -1;
+  const mix = Object.entries(track.mix);
+  const pickKind = (tt) => {
+    const w = mix.map(([k, v]) => [k, tt < 6 ? (k === 'ring' ? 1 : 0) : tt < 12 && k === 'spiral' ? 0 : tt < 16 && k === 'cluster' ? 0 : tt >= COLLAPSE_AT && k === 'cluster' ? v * 0.4 : v]);
+    let x = r() * w.reduce((a, [, v]) => a + v, 0); for (const [k, v] of w) { if ((x -= v) <= 0) return k; } return 'ring';
+  };
+  const group = (kind, s0, s1, mask) => { const g = { id: id++, pat, kind, s0, s1, mask }; blocks.push(g); return g; };
+  const shiftTo = (from, m) => { if (m <= 0) return from; let mag = Math.max(1, Math.round(m * (t >= COLLAPSE_AT ? 0.75 + 0.25 * r() : 0.4 + 0.6 * r()))); const dir = r() < 0.72 ? -lastDir : lastDir; lastDir = dir; return segWrap(from + dir * mag); };
+  while (t < RACE_SECONDS + 5) {
+    let gap = pwl(GAPT, t) * (0.92 + 0.22 * r());
+    const kind = pickKind(t);
+    const w = clamp(Math.round(pwl(WIDTH, t) + (r() - 0.5) * (t < COLLAPSE_AT ? 1.2 : 0.6)), t < COLLAPSE_AT ? 2 : 1, 8);
+    // a pickup or strip is due: put it off the safe line in the open stretch, and leave time to get there and back
+    const dueE = plan.length && t >= plan[0][0] && t > 4 ? plan.shift() : null, due = dueE && dueE[1];
+    let nextC = shiftTo(c, maxShift(gap, t));
+    if (due === 'cache') {
+      // the cache's items in a row round the pipe, 2 positions apart, centred 4–5 positions off the safe line
+      const items = dueE[2], n = items.length, dir = r() < 0.5 ? -1 : 1, mid = segWrap(c + dir * (4 + Math.floor(r() * 2)));
+      const segs = items.map((_, k) => segWrap(mid + Math.round((k - (n - 1) / 2) * CACHE_SPACING)));
+      const far = Math.max(...segs.map((p) => Math.abs(segDist(c, p))));
+      const d1 = (far * STEP_SEC + REACT) / 0.85 + 0.12;
+      nextC = segWrap(mid + (r() < 0.5 ? -1 : 1) * Math.floor(r() * 3));
+      const back = Math.max(...segs.map((p) => Math.abs(segDist(p, nextC))));
+      const d2 = (back * STEP_SEC + REACT) / 0.85 + 0.12, sp = sAtT(t + d1), cache = caches++;
+      items.forEach((power, k) => orbs.push({ id: orbs.length, seg: segs[k], s: sp, power, cache }));
+      gap = Math.max(gap, d1 + d2);
+    } else if (due) {
+      const off = (r() < 0.5 ? -1 : 1) * (3 + Math.floor(r() * 3)), p = segWrap(c + off);
+      const len = STRIP[due] ? STRIP.len : 0, v = speedAt(t);
+      const d1 = (Math.abs(off) * STEP_SEC + REACT) / 0.85 + 0.12;
+      nextC = segWrap(p + (r() < 0.5 ? -1 : 1) * Math.floor(r() * 3));
+      const d2 = (Math.abs(segDist(p, nextC)) * STEP_SEC + REACT) / 0.85 + 0.12;
+      const tp = t + d1, sp = sAtT(tp);
+      if (STRIP[due]) strips.push({ id: strips.length, kind: due, seg: p, s0: sp, s1: sp + len });
+      else orbs.push({ id: orbs.length, seg: p, s: sp, power: due });
+      gap = Math.max(gap, d1 + len / v + d2);
+    } else if (t > 4 && r() < 0.4) {
+      // a gold orb a little off the line, only if there's time to fetch it and still make the next opening
+      const off = (r() < 0.5 ? -1 : 1) * (1 + Math.floor(r() * 3)), p = segWrap(c + off);
+      const d1 = (Math.abs(off) * STEP_SEC + REACT) / 0.85 + 0.05, d2 = (Math.abs(segDist(p, nextC)) * STEP_SEC + REACT) / 0.85 + 0.05;
+      if (d1 + d2 <= gap) orbs.push({ id: orbs.length, seg: p, s: sAtT(t + d1), power: null });
+    }
+    const tm = t + gap, s0 = sAtT(tm), v = speedAt(tm);
+    pat++;
+    if (kind === 'spiral') {
+      // a long sleeve of spikes with a twisting channel to follow
+      const late = clamp((t - 20) / 30, 0, 1), tau = (0.9 + r() * 0.9) * (1 - 0.4 * late), L = v * tau, n = Math.max(3, Math.round(L / 1.0)), len = L / n;
+      const turns = (r() < 0.5 ? -1 : 1) * Math.max(2, Math.round(tau * (3 + 2.5 * late + r() * 3.5)));
+      const ww = clamp(w + 1, 3, 8); // a twisting channel narrower than 3 can't be followed: difficulty comes from the twist rate
+      for (let k = 0; k < n; k++) {
+        const ck = segWrap(nextC + Math.round(turns * k / (n - 1)));
+        group('spiral', s0 + k * len, s0 + (k + 1) * len, gapMask(ck, ww));
+        path.push({ s: s0 + k * len, seg: ck });
+      }
+      c = segWrap(nextC + turns); t = tm + tau;
+    } else if (kind === 'twin') {
+      // two openings on opposite sides: pick one
+      const ww = Math.max(2, w - 1), other = segWrap(nextC + SEGS / 2 + Math.floor(r() * 3) - 1);
+      group('ring', s0, s0 + KIND.spike.len, gapMask(nextC, ww) & gapMask(other, ww));
+      path.push({ s: s0, seg: nextC });
+      c = nextC; t = tm + KIND.spike.len / v;
+    } else if (kind === 'cluster') {
+      // rows of short spike clusters scattered round the pipe: weave through
+      const rows = 2 + Math.floor(r() * 2), dt = 0.34;
+      for (let k = 0; k < rows; k++) {
+        const sr = sAtT(tm + k * dt);
+        let mask = 0;
+        const n = 3 + Math.floor(r() * 3);
+        for (let q = 0; q < n; q++) {
+          const at = Math.floor(r() * SEGS), size = 2 + Math.floor(r() * 2);
+          for (let z = 0; z < size; z++) { const sg = segWrap(at + z); if (Math.abs(segDist(nextC, sg)) > 1) mask |= 1 << sg; }
         }
+        if (mask) group('cluster', sr, sr + KIND.spike.len, mask);
+        path.push({ s: sr, seg: nextC });
       }
+      c = nextC; t = tm + (rows - 1) * dt + KIND.spike.len / v;
+    } else {
+      group('ring', s0, s0 + KIND.spike.len, gapMask(nextC, w));
+      path.push({ s: s0, seg: nextC });
+      c = nextC; t = tm + KIND.spike.len / v;
     }
-    // run spikes on the same lane together into one long row now and then
-    if (!first && !powerDue && B === prevB && prevBlock && prevBlock.s1 - prevBlock.s0 < 24 && r() < track.walls) {
-      prevBlock.s1 = s1; prevBlock.tB = tOfS(s1 + SPHERE_R); prevEnd = s1;
-      t = tm + pwl(GAP, tm) * (0.9 + 0.22 * r());
-      continue;
-    }
-    const main = mk(B, s0, s1);
-    // an orb in the blocked lane's gap: grab it with two quick taps, or play safe. Breaks ties at the cap.
-    // power-ups use the same kind of spot, at fixed times in the race (the first good gap after each planned time)
-    if (!first && B === prevB && prevBlock && t > 5) {
-      const gapS = s0 - prevEnd - 2 * SPHERE_R;
-      if (gapS / v > 0.5) {
-        if (powerDue && STRIP[plan[0][1]]) { const mid = (prevEnd + s0) / 2; strips.push({ id: strips.length, kind: plan.shift()[1], lane: B, s0: mid - STRIP.len / 2, s1: mid + STRIP.len / 2 }); }
-        else if (powerDue) orbs.push({ id: orbs.length, lane: B, s: (prevEnd + s0) / 2, power: plan.shift()[1], pid: pid++ });
-        else if (r() < 0.45) orbs.push({ id: orbs.length, lane: B, s: (prevEnd + s0) / 2, power: null });
-      }
-    }
-    prevB = B; prevEnd = Math.max(prevEnd, s1); prevBlock = main; first = false;
-    t = tm + pwl(GAP, tm) * (0.9 + 0.22 * r());
   }
   blocks.sort((a, b) => a.s0 - b.s0 || a.id - b.id);
-  // visual layout of the four rails along the road (drawn by the client; never affects play)
-  const layout = []; let lt = 0;
-  layout.push({ kind: 'launch', t0: 0, t1: 3.2 });
-  lt = 3.2;
-  const cycle = track.layout;
-  let ci = Math.floor(r() * cycle.length);
+  orbs.sort((a, b) => a.s - b.s); orbs.forEach((o, k) => { o.id = k; });
+  // visual layout of the pipes round the shared spine (drawn by the client; never affects play)
+  const layout = [{ kind: 'launch', t0: 0, t1: 3.2 }];
+  let lt = 3.2, ci = Math.floor(r() * track.layout.length);
   while (lt < COLLAPSE_AT) {
-    const k = cycle[ci++ % cycle.length];
-    const len = k === 'solo' ? 6 + r() * 5 : k === 'cross' ? 3.2 : k === 'helix' ? 5 + r() * 2 : 4 + r() * 3;
+    const k = track.layout[ci++ % track.layout.length];
+    const len = k === 'swap' ? 3.4 : k === 'twist' ? 5 + r() * 2 : k === 'spread' ? 6 + r() * 4 : 4 + r() * 3;
     const t1 = Math.min(COLLAPSE_AT, lt + len);
-    layout.push({ kind: k, t0: lt, t1, spin: r() < 0.5 ? -1 : 1, rise: r() * 2 - 1, turn: r() * 2 - 1 });
+    layout.push({ kind: k, t0: lt, t1, spin: r() < 0.5 ? -1 : 1, rise: r() * 2 - 1 });
     lt = t1;
   }
-  layout.push({ kind: 'merge', t0: COLLAPSE_AT, t1: RACE_SECONDS + 30, finale: true });
-  const startLane = 1 - (blocks.find((h) => !h.decoy)?.lane ?? 0);
-  orbs.sort((a, b) => a.s - b.s);
-  for (const h of blocks) h.live = true; // spikes are always solid
-  return { seed, track: track.key, blocks, orbs, strips, tl, startLane, layout, end: sAtT(RACE_SECONDS + 8) };
+  layout.push({ kind: 'bundle', t0: COLLAPSE_AT, t1: RACE_SECONDS + 40, finale: true });
+  return { seed, track: track.key, blocks, orbs, strips, path, tl: TL0, startSeg: 0, layout, end: sAtT(RACE_SECONDS + 10) };
 }
 
-// ───── the lane controller: identical for humans and bots ─────
-function sphereTap(b, tick) {
-  if (tick - b.lastTap < DEBOUNCE_TICKS) return;
-  b.lastTap = tick; b.taps++;
-  if (b.swapT > 0) b.buf = BUFFER_TICKS; else startSwap(b);
+// ───── moving round the pipe: identical for humans and bots ─────
+function qSum(b) { let s = 0; for (const d of b.q) s += d; return s; }
+function pushStep(b, dir) { if (b.q.length < QUEUE_MAX) { b.q.push(dir); b.taps++; } }
+function stepCtl(b) {
+  if (b.stepT === 0 && b.q.length) { const d = b.q.shift(); b.from = b.seg; b.seg = segWrap(b.seg + d); b.stepT = STEP_TICKS; b.dir = d; }
+  if (b.stepT > 0) { b.stepT--; b.cl = STEP_TICKS - b.stepT >= STEP_MID ? b.seg : b.from; }
 }
-function startSwap(b) { b.from = b.target; b.target = 1 - b.target; b.swapT = SWAP_TICKS; b.buf = 0; }
-function advanceSwap(b) {
-  if (b.swapT > 0) {
-    b.swapT--;
-    b.cl = SWAP_TICKS - b.swapT >= SWAP_MID ? b.target : b.from; // collision lane flips at the 50% point
-    if (b.swapT === 0 && b.buf > 0) { startSwap(b); b.swapT--; b.cl = b.from; } // buffered tap: straight into the next change
+/** Index of the first spike group that could still touch a racer at distance s (groups are sorted by start). */
+function firstBlock(H, s) { let lo = 0, hi = H.length; while (lo < hi) { const m = (lo + hi) >> 1; if (H[m].s0 < s - 30) lo = m + 1; else hi = m; } return lo; }
+/** Is position `seg` covered by spikes (that this racer hasn't destroyed) anywhere in [sA, sB]? */
+function blockedAt(course, b, seg, sA, sB) {
+  const H = course.blocks;
+  for (let j = firstBlock(H, sA); j < H.length; j++) {
+    const g = H[j]; if (g.s0 - SPHERE_R > sB) break;
+    if (g.s1 + SPHERE_R < sA || !((g.mask >> seg) & 1) || (b.gone && b.gone.has(g.id))) continue;
+    return true;
   }
-  if (b.buf > 0) b.buf--;
+  return false;
 }
-const TAP_TO_FLIP = 2; // ticks from a tap to the collision lane flipping (see advanceSwap)
-/** Move one sphere along its own road for this tick: base speed × its strip effect. Then check strips it rolls onto. */
-function moveSphere(b, course, tick) {
+/** Nearest position with no spikes in group g's mask (prefer `pref` direction on a tie). */
+function nearestFree(mask, from, pref = 1) {
+  if (!((mask >> from) & 1)) return from;
+  for (let d = 1; d <= SEGS / 2; d++) {
+    const a = segWrap(from + d * pref), b = segWrap(from - d * pref);
+    if (!((mask >> a) & 1)) return a;
+    if (!((mask >> b) & 1)) return b;
+  }
+  return from;
+}
+/** This racer's forward speed this tick: base × strip × slowed by a burst × lifted by an EMP; ether boost floors it. */
+function racerSpeed(b, tick) {
   const t = (tick - 1) * DT;
-  b.v = speedAt(t) * fxMul(b.fxKind, (tick - 1 - b.fxTick) * DT);
+  let v = speedAt(t) * fxMul(b.fxKind, (tick - 1 - b.fxTick) * DT);
+  if (tick <= b.slowUntil) v *= SLOW_FX.mul;
+  if (tick <= b.empUntil) v *= EMP_FX.mul;
+  if (tick <= b.etherUntil) v = Math.max(v, POWERS.ether.speed);
+  return v;
+}
+/** One racer's own tick (steering, moving, strips, landing from an EMP). Shared with the browser's prediction. */
+function moveSphere(b, course, tick) {
+  if (tick <= b.empUntil) { b.q.length = 0; }
+  else stepCtl(b);
+  if (tick === b.empUntil + 1) { // coming down from an EMP: always onto a free position
+    const free = !blockedAt(course, b, b.seg, b.s - 0.4, b.s + 2.5);
+    if (!free) { let best = b.seg; for (let d = 1; d <= SEGS / 2; d++) { if (!blockedAt(course, b, segWrap(b.seg + d), b.s - 0.4, b.s + 2.5)) { best = segWrap(b.seg + d); break; } if (!blockedAt(course, b, segWrap(b.seg - d), b.s - 0.4, b.s + 2.5)) { best = segWrap(b.seg - d); break; } } b.seg = b.from = b.cl = best; }
+    b.stepT = 0; b.cl = b.seg;
+  }
+  b.v = racerSpeed(b, tick);
   b.s += b.v * DT;
+  if (tick <= b.empUntil) return;
   const S = course.strips;
   for (let j = 0; j < S.length; j++) {
     const st = S[j];
-    if (b.s < st.s0 - SPHERE_R || b.s > st.s1 + SPHERE_R || b.cl !== (st.lane ^ b.mirror) || b.strips.includes(st.id)) continue;
+    if (b.s < st.s0 - SPHERE_R || b.s > st.s1 + SPHERE_R || b.cl !== st.seg || b.strips.includes(st.id)) continue;
     b.strips.push(st.id); b.fxKind = st.kind; b.fxTick = tick;
   }
 }
-/** Index of the first spike that could still touch a sphere at distance s (spikes are sorted by start). */
-function firstBlock(H, s) { let lo = 0, hi = H.length; while (lo < hi) { const m = (lo + hi) >> 1; if (H[m].s0 < s - 40) lo = m + 1; else hi = m; } return lo; }
-
-/** First solid hazard on `lane` (as this sphere sees it) between s and s + ahead; null if the way is clear. */
-function threatOn(course, b, lane, s, ahead, from, fooled) {
-  const H = course.blocks;
-  for (let j = from; j < H.length; j++) {
-    const h = H[j];
-    if (h.s0 - SPHERE_R > s + ahead) break;
-    if ((h.lane ^ b.mirror) !== lane || h.s1 + SPHERE_R <= s) continue;
-    if (h.live || (fooled && fooled(h))) return h;
+/** Does racer b hit spikes this tick? (not counting shield / invincibility) */
+function spikeHit(course, b) {
+  const H = course.blocks, s = b.s;
+  for (let j = firstBlock(H, s); j < H.length; j++) {
+    const g = H[j];
+    if (g.s0 - SPHERE_R >= s) break;
+    if (g.s1 + SPHERE_R <= s || !((g.mask >> b.cl) & 1) || b.gone.has(g.id)) continue;
+    return g;
   }
   return null;
 }
 
 /**
- * cfg: { key (track), seed, players: [{ i, name, human?, skill?, skin? }], active: [i, …], botSalt?, debug? }
- *  debug (practice only; the server never sets it): { god: [seat…] never crash }
- * rng (anti-peeking, same contract as before): server { record: [] } logs every draw; browsers { feed } replay them.
- * The course needs only three draws, all taken here at the start.
+ * cfg: { key (track), seed, players: [{ i, name, human?, skill?, skin?, ai? }], active: [i, …], botSalt?, debug? }
+ *  debug (practice only; the server never sets it): { god: [seat…] never crash, give: item every racer starts with }
+ * rng (anti-peeking): server { record: [] } logs every draw; browsers { feed } replay them. Only a few draws, all at the start.
  */
 function createRound(cfg, rng = {}) {
   const src = makeRng(cfg.seed ?? 0);
@@ -196,26 +261,27 @@ function createRound(cfg, rng = {}) {
   const draw = () => Math.floor(RNG() * 4294967296) >>> 0;
   const trackKey = TRACKS[cfg.key] ? cfg.key : 'nebula', dbg = cfg.debug || {};
   const ca = draw(), cb = draw();
-  // a course the perfect pilot can't finish is impossible: rebuild (deterministically) until it can
+  // a course the flawless driver can't finish is impossible: rebuild (deterministically) until it can
   let course = null;
-  for (let k = 0; k < 12 && !course; k++) { const c = buildCourse(ca + ':' + cb + ':' + k, trackKey, dbg); if (pilotSurvives(c)) course = c; }
-  if (!course) course = buildCourse(ca + ':' + cb + ':safe', trackKey, dbg);
+  for (let k = 0; k < 16 && !course; k++) { const c = buildCourse(ca + ':' + cb + ':' + k, trackKey); if (pilotSurvives(c)) course = c; }
+  if (!course) course = buildCourse(ca + ':' + cb + ':safe', trackKey);
   const god = new Set(dbg.god || []);
-  const order = shuffleWith(RNG, cfg.active);        // who drives the mirrored road (exactly as hard)
-  const tieOrder = shuffleWith(RNG, cfg.active);     // last-resort tie-break, fixed before the start
+  const tieOrder = shuffleWith(RNG, cfg.active); // last-resort tie-break, fixed before the start
   const botRng = makeRng('bots:' + (cfg.seed ?? 0) + ':' + (cfg.botSalt ?? ''));
-  const spheres = cfg.players.map((p) => {
-    const m = order.indexOf(p.i) & 1, lane = course.startLane ^ m;
-    return { i: p.i, name: p.name || ROSTER[p.i][0], color: ROSTER[p.i][1], glyph: ROSTER[p.i][2], human: !!p.human, skill: p.skill ?? 0.85, skin: p.skin | 0,
-      mirror: m, target: lane, from: lane, cl: lane, swapT: 0, buf: 0, lastTap: -99, taps: 0, alive: true, orbs: 0, got: [],
-      shield: 0, immuneS: -1, magnetT: 0, doubleT: 0, shieldUsedTick: 0, s: 0, v: 0, fxKind: null, fxTick: -999, strips: [],
-      deathTick: 0, killer: -1, place: 0, plan: 0, planFor: -1, fooled: {}, want: {}, ai: p.ai || null, active: cfg.active.includes(p.i) };
-  });
+  const spheres = cfg.players.map((p) => ({
+    i: p.i, name: p.name || ROSTER[p.i][0], color: ROSTER[p.i][1], glyph: ROSTER[p.i][2], human: !!p.human, skill: p.skill ?? 0.85, skin: p.skin | 0,
+    mirror: 0, seg: course.startSeg, from: course.startSeg, cl: course.startSeg, stepT: 0, dir: 0, q: [], taps: 0, alive: true, orbs: 0, got: [],
+    shield: 0, immuneUntil: 0, magnetT: 0, doubleT: 0, shieldUsedTick: 0, s: 0, v: 0, fxKind: null, fxTick: -999, strips: [],
+    item: dbg.give && POWERS[dbg.give] && POWERS[dbg.give].held ? dbg.give : null, ammo: dbg.give === 'cannon' ? 2 : 0, lastUse: -99,
+    slowUntil: 0, empUntil: 0, empStart: -999, etherUntil: 0, gone: new Set(),
+    deathTick: 0, killer: -1, place: 0, ai: p.ai || null, seen: null, actAt: 0, extra: 0, overPending: false, want: {}, heldSince: 0,
+    active: cfg.active.includes(p.i),
+  }));
   const byI = new Map(spheres.map((b) => [b.i, b]));
   const active = cfg.active.map((i) => byI.get(i));
-  let tick = 0, t = 0, s = 0, winner = null, bi = 0, oi = 0; // s = the leader's distance; every sphere has its own b.s
+  let tick = 0, t = 0, s = 0, winner = null;
   const H = course.blocks, O = course.orbs;
-  const finishOrder = []; // eliminated, earliest first
+  const finishOrder = [], waves = [], shots = [], events = [];
   function decide(cands, why) {
     let best = null;
     const better = (a, c) => a.s !== c.s ? a.s > c.s : a.orbs !== c.orbs ? a.orbs > c.orbs : a.taps !== c.taps ? a.taps < c.taps : tieOrder.indexOf(a.i) < tieOrder.indexOf(c.i);
@@ -223,69 +289,107 @@ function createRound(cfg, rng = {}) {
     R.decidedBy = cands.length < 2 ? why : cands.some((b) => b.s !== best.s) ? 'distance' : cands.some((b) => b.orbs !== best.orbs) ? 'orbs' : cands.some((b) => b.taps !== best.taps) ? 'taps' : 'draw';
     return best;
   }
-  function botTap(b) {
-    const keep = RNG; RNG = botRng;
-    try { return botThink(b); } finally { RNG = keep; }
+  // ── items
+  function useItem(b) {
+    if (!b.item || tick - b.lastUse < USE_GAP) return;
+    b.lastUse = tick;
+    const kind = b.item;
+    if (kind === 'cannon') {
+      // the shot flies down your current position and destroys the first group of spikes there (for you only)
+      let target = null;
+      for (let j = firstBlock(H, b.s); j < H.length; j++) { const g = H[j]; if (g.s0 > b.s + SHOT_RANGE) break; if (g.s1 + SPHERE_R < b.s || b.gone.has(g.id) || !((g.mask >> b.seg) & 1)) continue; target = g; break; }
+      const dist = target ? Math.max(0, target.s0 - b.s) : SHOT_RANGE;
+      const hitTick = tick + Math.max(1, Math.ceil(dist / (SHOT_SPEED * DT)));
+      shots.push({ i: b.i, seg: b.seg, s0: b.s, tick0: tick, hitTick, target: target ? target.id : -1, done: false });
+      if (--b.ammo <= 0) b.item = null;
+    } else {
+      if (kind === 'burst') waves.push({ kind, i: b.i, s0: b.s, tick0: tick, hit: [] });
+      else if (kind === 'emp') waves.push({ kind, i: b.i, s0: b.s, tick0: tick, hit: [] });
+      else if (kind === 'ether') b.etherUntil = tick + POWERS.ether.ticks;
+      b.item = null;
+    }
+    events.push({ tick, kind: 'use', item: kind, i: b.i });
   }
-  // Bots read the road like a player: spot the next solid hazard in their lane, find the window on the other
-  // lane, and tap to land in the middle of it, with human-like timing error (less skilled → sloppier, slower to
-  // react, fooled by decoys more often). Good bots also detour for orbs. cfg.players[].ai overrides the profile
-  // (the test suite uses it to model players with 150–400 ms reactions).
+  // a burst or EMP reaching racer o
+  function strike(w, o) {
+    w.hit.push(o.i);
+    if (tick <= o.etherUntil) { events.push({ tick, kind: 'immune', item: w.kind, i: o.i, by: w.i }); return; }
+    if (o.shield) { o.shield = 0; o.shieldUsedTick = tick; events.push({ tick, kind: 'blocked', item: w.kind, i: o.i, by: w.i }); return; }
+    if (w.kind === 'burst') o.slowUntil = tick + SLOW_FX.ticks;
+    else { o.empUntil = tick + EMP_FX.ticks; o.empStart = tick; o.q.length = 0; o.stepT = 0; o.cl = o.seg; o.from = o.seg; }
+    events.push({ tick, kind: 'hit', item: w.kind, i: o.i, by: w.i });
+  }
+  // ── computer players: read the pipe like a player. Spot the next spikes that cover where you'll be, find the
+  // nearest opening, and step to it after a human-like reaction delay; now and then react late or overshoot by one.
+  // Good ones detour for pickups and use items sensibly. cfg.players[].ai overrides the profile (tests model
+  // players with 150–400 ms reactions).
   function aiOf(b) {
     if (b.ai) return b.ai;
     const k = 1 - b.skill;
-    return (b.ai = { react: 6 + Math.round(k * 14), sigma: 0.6 + k * 7, fool: k * 0.45, lapse: (k + 0.1) * 0.06, greed: b.skill > 0.7 ? 0.75 : 0.3, aim: k * 0.6 });
+    return (b.ai = { react: 8 + Math.round(k * 16), jitter: 2 + k * 10, lapse: 0.02 + k * 0.1, over: k * 0.35, look: 1.5, greed: b.skill > 0.7 ? 0.7 : 0.35, items: 1 });
   }
-  function botThink(b) {
-    const ai = aiOf(b), s = b.s, v = Math.max(1, b.v || speedAt(t)), bi = firstBlock(H, s);
-    if (b.plan && tick >= b.plan) { b.plan = 0; return true; }
-    if (b.plan || b.swapT > 0) return false;
-    const ahead = v * 1.6;
-    // the tick this sphere reaches x: step its own speed forward, strip effect included
-    const tickAtS = (x) => { let ss = s, k = tick; while (ss < x && k < tick + 600) { k++; ss += speedAt((k - 1) * DT) * fxMul(b.fxKind, (k - 1 - b.fxTick) * DT) * DT; } return k; };
-    const fooled = () => false;
-    const L2 = 1 - b.target;
-    // the latest point the flip can happen so the other lane is clear from there up to sb
-    const windowTo = (sb) => {
-      let sa = s + 0.05;
-      for (let j = bi; j < H.length; j++) {
-        const h = H[j]; if (h.s0 - SPHERE_R >= sb) break;
-        if ((h.lane ^ b.mirror) !== L2 || h.s1 + SPHERE_R <= s) continue;
-        sa = Math.max(sa, h.s1 + SPHERE_R + 0.02);
-      }
-      return sa;
-    };
-    const schedule = (sa, sb, id) => {
-      b.planFor = id;
-      if (sa > sb) return false; // no way round from here: hold and hope
-      const g = (RNG() + RNG() + RNG() - 1.5) * 2 * ai.sigma;
-      let k = tickAtS(sa + (sb - sa) * (0.5 + (RNG() - 0.5) * ai.aim)) - TAP_TO_FLIP + Math.round(g);
-      if (RNG() < ai.lapse) k += 4 + Math.floor(RNG() * 10); // a late reaction now and then
-      k = Math.max(k, tick + ai.react, b.lastTap + DEBOUNCE_TICKS);
-      if (k <= tick) return true;
-      b.plan = k; return false;
-    };
-    const th = threatOn(course, b, b.target, s, ahead, bi, fooled);
-    // pickups on the other lane before any threat here: orbs and power-ups (greedy bots), boost strips
-    // (good bots like them), slow strips (shaky bots take them for the breathing room)
-    const wants = [];
-    for (const o of O) if (o.s > s + 1 && o.s < s + ahead && (o.lane ^ b.mirror) === L2 && !b.got.includes(o.id) && !(o.power === 'shield' && b.shield)) wants.push({ id: 'o' + o.id, at: o.s - 0.1, p: ai.greed });
-    for (const st of course.strips) if (st.s0 > s + 1 && st.s0 < s + ahead && (st.lane ^ b.mirror) === L2 && !b.strips.includes(st.id)) wants.push({ id: 'x' + st.id, at: st.s0 + 0.4, p: ai.strips === 0 ? 0 : st.kind === 'boost' ? (b.skill > 0.75 ? 0.7 : 0.25) : (b.skill < 0.7 ? 0.45 : 0.08) });
-    wants.sort((x, y) => x.at - y.at);
-    for (const w of wants) {
-      if (th && w.at > th.s0) break;
-      if (b.planFor === w.id) continue;
-      if (!(b.want[w.id] ??= RNG() < w.p)) continue;
-      const sa = windowTo(w.at);
-      if (w.at - sa < v * 0.12) continue; // too tight to bother
-      return schedule(sa, w.at, w.id);
+  function botInput(b) {
+    const ai = aiOf(b);
+    if (tick <= b.empUntil) return 0;
+    let bits = 0;
+    if (b.extra) { bits |= b.extra > 0 ? IN_R : IN_L; b.extra = 0; b.seen = null; return bits; } // the overshoot
+    const v = Math.max(5, b.v || speedAt(t)), look = v * ai.look, planned = segWrap(b.seg + qSum(b));
+    // the next spikes that cover where we'll be
+    let g = null;
+    for (let j = firstBlock(H, b.s); j < H.length; j++) {
+      const h = H[j]; if (h.s0 - SPHERE_R > b.s + look) break;
+      if (h.s1 + SPHERE_R < b.s || b.gone.has(h.id)) continue;
+      if ((h.mask >> planned) & 1) { g = h; break; }
     }
-    if (!th || b.planFor === th.id) return false;
-    const sb = th.s0 - SPHERE_R - 0.02;
-    return schedule(windowTo(sb), sb, th.id);
+    let goal = planned, seen = null, until = b.s + v * STEP_SEC * 1.2;
+    if (g) { goal = nearestFree(g.mask, planned, b.dir || 1); seen = 'g' + g.pat; until = Math.max(b.s, g.s0 - SPHERE_R - 0.01); }
+    else if (ai.greed > 0) {
+      // nothing in the way: maybe go for a pickup or a strip
+      const nextG = (x) => { for (let j = firstBlock(H, x); j < H.length; j++) { const h = H[j]; if (h.s0 > x) return h; } return null; };
+      const cands = [];
+      for (const o of O) if (o.s > b.s + 1 && o.s < b.s + look && !b.got.includes(o.id) && !(o.power === 'shield' && b.shield)) cands.push({ id: 'o' + o.id, seg: o.seg, s: o.s, p: o.power && POWERS[o.power].held && b.item ? 0.2 : ai.greed });
+      for (const st of course.strips) if (st.s0 > b.s + 1 && st.s0 < b.s + look && !b.strips.includes(st.id)) cands.push({ id: 'x' + st.id, seg: st.seg, s: st.s0 + 0.5, p: ai.strips === 0 ? 0 : st.kind === 'boost' ? (b.skill > 0.75 ? 0.65 : 0.25) : (b.skill < 0.7 ? 0.45 : 0.1) });
+      for (const c of cands) {
+        if (!(b.want[c.id] ??= RNG() < c.p)) continue;
+        const ticks = (c.s - b.s) / (v * DT), need = Math.abs(segDist(planned, c.seg)) * STEP_TICKS + ai.react;
+        const after = nextG(c.s), back = after ? Math.abs(segDist(c.seg, nearestFree(after.mask, c.seg))) * STEP_TICKS + ai.react : 0;
+        const room = after ? (after.s0 - c.s) / (v * DT) : 999;
+        if (need < ticks && back < room * 0.9) { goal = c.seg; seen = c.id; until = Math.max(b.s, c.s - 0.5); break; }
+      }
+    }
+    if (seen === b.seen && goal !== b.lastGoal && seen) b.actAt = Math.max(b.actAt, tick + Math.round(ai.react * 0.35 + RNG() * ai.jitter * 0.5));
+    b.lastGoal = goal;
+    if (seen !== b.seen) {
+      b.seen = seen;
+      b.actAt = tick + ai.react + Math.round(RNG() * ai.jitter) + (RNG() < ai.lapse ? 8 + Math.floor(RNG() * 14) : 0);
+      b.overPending = RNG() < ai.over;
+    }
+    if (tick >= b.actAt && goal !== planned && b.q.length === 0) {
+      let d = segDist(planned, goal); if (d === SEGS / 2 || d === -SEGS / 2) d = b.dir || 1;
+      const dir = d > 0 ? 1 : -1, next = segWrap(planned + dir);
+      // never step into spikes between here and the spikes we're steering for
+      if (!blockedAt(course, b, next, b.s, until)) {
+        bits |= dir > 0 ? IN_R : IN_L;
+        if (Math.abs(d) === 1 && b.overPending) { b.overPending = false; b.extra = dir; }
+      }
+    }
+    // items
+    if (b.item && ai.items && tick - b.lastUse >= USE_GAP) {
+      const held = tick - b.heldSince, others = active.filter((o) => o !== b && o.alive);
+      let use = false;
+      if (b.item === 'cannon') {
+        if (g && g.s0 - b.s < v * 0.7 && Math.abs(segDist(planned, goal)) * STEP_TICKS > (g.s0 - b.s) / (v * DT) - 4) use = true; // can't make it: blast through
+        else if (g && g.s0 - b.s < 18 && RNG() < 0.01) use = true;
+      } else if (b.item === 'burst') use = others.some((o) => Math.abs(o.s - b.s) < 40) || held > 300;
+      else if (b.item === 'emp') use = others.some((o) => o.s > b.s && o.s - b.s < 140) || held > 360;
+      else if (b.item === 'ether') use = (g && Math.abs(segDist(planned, goal)) >= 4 && g.s0 - b.s < v * 0.6) || held > 300;
+      if (use) bits |= IN_USE;
+    }
+    return bits;
   }
+  function botStep(b) { const keep = RNG; RNG = botRng; try { return botInput(b); } finally { RNG = keep; } }
   const R = {
-    key: trackKey, god, course, spheres, beans: spheres, active, isFinal: false, decidedBy: null, finishOrder,
+    key: trackKey, god, course, spheres, beans: spheres, active, isFinal: false, decidedBy: null, finishOrder, waves, shots, events,
     get t() { return t; }, get tick() { return tick; }, get s() { return s; }, get winner() { return winner; },
     get timeout() { return RACE_SECONDS; },
     /** inputs: { [seat]: packedInt }. Missing seats are played by the bot (own RNG stream) and written back. */
@@ -295,40 +399,54 @@ function createRound(cfg, rng = {}) {
       for (const b of active) {
         if (!b.alive) continue;
         let p = inputs[b.i];
-        if (p == null) { p = botTap(b) ? TAP : 0; inputs[b.i] = p; }
-        if ((p >>> 0) & TAP) sphereTap(b, tick);
-        advanceSwap(b);
+        if (p == null) { p = botStep(b); inputs[b.i] = p; }
+        p >>>= 0;
+        if (tick > b.empUntil) { if (p & IN_L) pushStep(b, -1); if (p & IN_R) pushStep(b, 1); }
+        if (p & IN_USE) useItem(b);
         moveSphere(b, course, tick);
       }
       s = 0; for (const b of active) if (b.s > s) s = b.s;
-      // collisions (track coordinates only)
+      // cannon shots land
+      for (const sh of shots) if (!sh.done && tick >= sh.hitTick) { sh.done = true; if (sh.target >= 0) { byI.get(sh.i).gone.add(sh.target); events.push({ tick, kind: 'blast', i: sh.i, g: sh.target }); } }
+      // bursts and EMPs spread
+      for (const w of waves) {
+        if (w.done) continue;
+        const reach = (tick - w.tick0) * DT * (w.kind === 'burst' ? WAVE_SPEED : EMP_SPEED);
+        let pending = 0;
+        for (const o of active) {
+          if (o.i === w.i || !o.alive || w.hit.includes(o.i)) continue;
+          if (w.kind === 'burst') { if (Math.abs(o.s - w.s0) <= reach) strike(w, o); else pending++; }
+          else if (o.s >= w.s0) { if (o.s <= w.s0 + reach) strike(w, o); else pending++; }
+        }
+        if (!pending || reach > 4000) w.done = true;
+      }
+      // spikes
       const died = [];
       for (const b of active) {
-        if (!b.alive) continue;
-        const s = b.s;
-        for (let j = firstBlock(H, s); j < H.length; j++) {
-          const h = H[j];
-          if (h.s0 - SPHERE_R >= s) break;
-          if (h.s1 + SPHERE_R <= s || (h.lane ^ b.mirror) !== b.cl || s < b.immuneS) continue;
-          if (hazardOn(h, t)) {
-            if (b.shield) { b.shield = 0; b.immuneS = h.s1 + SPHERE_R + 0.5; b.shieldUsedTick = tick; break; } // pass through this one
-            if (god.has(b.i)) continue;
-            b.alive = false; b.deathTick = tick; b.killer = h.id; died.push(b); break;
-          }
-        }
+        if (!b.alive || tick <= b.empUntil || tick <= b.etherUntil || tick <= b.immuneUntil) continue;
+        const g = spikeHit(course, b);
+        if (!g) continue;
+        if (b.shield) { b.shield = 0; b.shieldUsedTick = tick; b.immuneUntil = tick + 36; events.push({ tick, kind: 'blocked', item: 'spike', i: b.i }); continue; }
+        if (god.has(b.i)) continue;
+        b.alive = false; b.deathTick = tick; b.killer = g.id; died.push(b);
       }
-      // orbs
-      for (let j = 0; j < O.length; j++) {
-        const o = O[j];
+      // pickups
+      for (const o of O) {
         for (const b of active) {
-          if (!b.alive || b.got.includes(o.id) || Math.abs(o.s - b.s) > ORB_R + SPHERE_R) continue;
-          const inLane = b.cl === (o.lane ^ b.mirror);
-          if (!(inLane || (!o.power && tick < b.magnetT))) continue;
+          if (!b.alive || tick <= b.empUntil || b.got.includes(o.id) || Math.abs(o.s - b.s) > ORB_R + SPHERE_R) continue;
+          const d = Math.abs(segDist(b.cl, o.seg));
+          if (!(d === 0 || (!o.power && tick < b.magnetT && d <= 3))) continue;
           b.got.push(o.id);
+          if (o.cache != null) for (const q of O) if (q.cache === o.cache && q !== o && !b.got.includes(q.id)) b.got.push(q.id); // the rest of the cache is gone for you
           if (!o.power) b.orbs += tick < b.doubleT ? 2 : 1;
-          else if (o.power === 'shield') b.shield = 1;
-          else if (o.power === 'magnet') b.magnetT = tick + POWERS.magnet.ticks;
-          else if (o.power === 'double') b.doubleT = tick + POWERS.double.ticks;
+          else {
+            const P = POWERS[o.power];
+            if (o.power === 'shield') b.shield = 1;
+            else if (o.power === 'magnet') b.magnetT = tick + P.ticks;
+            else if (o.power === 'double') b.doubleT = tick + P.ticks;
+            else { b.item = o.power; b.ammo = P.ammo || 0; b.heldSince = tick; }
+            events.push({ tick, kind: 'pickup', item: o.power, i: b.i });
+          }
         }
       }
       for (const b of died) finishOrder.push(b);
@@ -338,7 +456,6 @@ function createRound(cfg, rng = {}) {
       else if (!alive.length) winner = decide(died, 'last alive');
       else if (tick >= RACE_TICKS) winner = decide(alive, 'time');
       if (winner) {
-        // places: winner first, then survivors / simultaneous fallers by the same rule, then latest eliminations
         const rest = active.filter((b) => b !== winner).sort((a, c) => (c.alive - a.alive) || (c.deathTick - a.deathTick) || (c.s - a.s) || (c.orbs - a.orbs) || (a.taps - c.taps) || (tieOrder.indexOf(a.i) - tieOrder.indexOf(c.i)));
         [winner, ...rest].forEach((b, k) => { b.place = k + 1; });
       }
@@ -346,8 +463,9 @@ function createRound(cfg, rng = {}) {
     },
     /** Exact fingerprint of the race state. */
     hash() {
-      const n = [t, s];
-      for (const b of active) n.push(b.target, b.from, b.cl, b.swapT, b.buf, b.lastTap, b.alive ? 1 : 0, b.orbs, b.deathTick, b.shield, b.immuneS, b.magnetT, b.doubleT, b.s, b.fxTick, b.fxKind === 'boost' ? 1 : b.fxKind === 'slow' ? 2 : 0);
+      const n = [t, s, waves.length, shots.length];
+      for (const b of active) n.push(b.seg, b.from, b.cl, b.stepT, b.q.length, qSum(b), b.alive ? 1 : 0, b.orbs, b.deathTick, b.shield, b.immuneUntil, b.magnetT, b.doubleT,
+        b.s, b.fxTick, b.fxKind === 'boost' ? 1 : b.fxKind === 'slow' ? 2 : 0, ITEM_CODE[b.item] || 0, b.ammo, b.slowUntil, b.empUntil, b.etherUntil, b.gone.size);
       return hashNums(n);
     },
     coast() {},
@@ -355,46 +473,36 @@ function createRound(cfg, rng = {}) {
   return R;
 }
 
-/** Replays a course with a flawless driver (taps in the middle of every window). Courses it can't finish are rebuilt. */
-function pilotSurvives(course) {
-  const { sAtTick, tickAtS, speedAtT: speedAt } = TL0; // flawless driver at base speed, takes no strips
-  const H = course.blocks, b = { mirror: 0, target: course.startLane, from: course.startLane, cl: course.startLane, swapT: 0, buf: 0, lastTap: -99, taps: 0 };
-  let plan = 0, planFor = -1, bi = 0;
+/** Drives a course along its safe line with perfect reactions. Courses it can't finish are rebuilt. */
+function pilotSurvives(course, trace) {
+  const P = course.path, b = { seg: course.startSeg, from: course.startSeg, cl: course.startSeg, stepT: 0, dir: 0, q: [], taps: 0, s: 0, v: 0, fxKind: null, fxTick: -999, strips: [], gone: new Set(), slowUntil: 0, empUntil: -1, etherUntil: 0 };
+  let pi = 0;
   for (let tick = 1; tick <= RACE_TICKS; tick++) {
-    const t = tick * DT, s = sAtTick(tick);
-    while (bi < H.length && H[bi].s1 + SPHERE_R < s - 40) bi++;
-    let tap = false;
-    if (plan && tick >= plan) { plan = 0; tap = true; }
-    else if (!plan && b.swapT === 0) {
-      const th = threatOn(course, b, b.target, s, speedAt(t) * 2.5, bi, null);
-      if (th && th.id !== planFor) {
-        planFor = th.id;
-        const sb = th.s0 - SPHERE_R - 0.02; let sa = s + 0.05;
-        for (let j = bi; j < H.length; j++) { const h = H[j]; if (h.s0 - SPHERE_R >= sb) break; if (h.lane !== 1 - b.target || h.s1 + SPHERE_R <= s) continue; if (h.live) sa = Math.max(sa, h.s1 + SPHERE_R + 0.02); }
-        if (sa <= sb) { const k = Math.max(tickAtS((sa + sb) / 2) - TAP_TO_FLIP, b.lastTap + DEBOUNCE_TICKS); if (k <= tick) tap = true; else plan = k; }
-      }
+    while (pi < P.length && P[pi].s + SPHERE_R < b.s) pi++;
+    const want = pi < P.length ? P[pi].seg : b.seg, planned = segWrap(b.seg + qSum(b));
+    if (want !== planned && b.q.length === 0 && b.stepT <= 1) {
+      const d = segDist(planned, want), dir = d > 0 ? 1 : -1, next = segWrap(planned + dir);
+      const until = pi < P.length ? Math.max(b.s, P[pi].s - SPHERE_R - 0.01) : b.s + 2;
+      if (!blockedAt(course, b, next, b.s, until)) pushStep(b, dir);
     }
-    if (tap) sphereTap(b, tick);
-    advanceSwap(b);
-    for (let j = bi; j < H.length; j++) {
-      const h = H[j]; if (h.s0 - SPHERE_R >= s) break;
-      if (h.s1 + SPHERE_R <= s || h.lane !== b.cl) continue;
-      if (hazardOn(h, t)) return false;
-    }
+    stepCtl(b);
+    b.v = speedAt((tick - 1) * DT); b.s += b.v * DT;
+    const hit = spikeHit(course, b);
+    if (hit) { if (trace) Object.assign(trace, { tick, seg: b.cl, g: hit, want: pi < P.length ? P[pi] : null }); return false; }
   }
   return true;
 }
 
 // The six tracks (the "arenas" of this game). Keys are stage ids in the on-chain evidence: APPEND ONLY.
-// A track sets how the four rails braid, its look, and how often spikes run together into long rows. The difficulty
-// schedule (gaps, switch windows, final collapse) is the same on every track, and inside a race every racer
-// has the same road (mirrored), so the track drawn never favours anyone.
+// A track sets how the four pipes braid round each other, its look, and its mix of spike patterns (rings with an
+// opening, twin rings with two, twisting spiral channels, scattered clusters). The difficulty schedule is the same on
+// every track, and inside a race every racer gets the identical course, so the track drawn never favours anyone.
 const TRACKS = {
-  nebula: { key: 'nebula',  name: 'Nebula Run', sub: 'Long sweeping curves.', theme: 'void', walls: 0.3, layout: ['solo', 'parallel', 'cross', 'solo', 'helix', 'merge'] },
-  helix: { key: 'helix',  name: 'Ion Helix', sub: 'Rails corkscrew round each other.', theme: 'ion', walls: 0.22, layout: ['helix', 'parallel', 'helix', 'cross', 'helix', 'merge'] },
-  canyon: { key: 'canyon',  name: 'Solar Canyon', sub: 'Switchbacks between long rows of spikes.', theme: 'solar', walls: 0.42, layout: ['solo', 'cross', 'solo', 'parallel', 'cross', 'merge'] },
-  cathedral: { key: 'cathedral',  name: 'Prism Cathedral', sub: 'Climbs and drops past glass towers.', theme: 'prism', walls: 0.3, layout: ['parallel', 'solo', 'merge', 'helix', 'solo', 'cross'] },
-  storm: { key: 'storm',  name: 'Vector Storm', sub: 'Rails flung far apart, then slammed together.', theme: 'vector', walls: 0.25, layout: ['solo', 'solo', 'merge', 'solo', 'cross', 'parallel'] },
-  ghost: { key: 'ghost',  name: 'Signal Ghost', sub: 'Braids and crossings.', theme: 'signal', walls: 0.36, layout: ['cross', 'parallel', 'cross', 'helix', 'cross', 'merge'] },
+  nebula: { key: 'nebula', name: 'Nebula Run', sub: 'Long sweeping curves. A bit of everything.', theme: 'void', mix: { ring: 4, twin: 2, spiral: 2, cluster: 2 }, layout: ['spread', 'bundle', 'swap', 'spread', 'twist', 'bundle'] },
+  helix: { key: 'helix', name: 'Ion Helix', sub: 'Pipes corkscrew round each other. Spiral channels.', theme: 'ion', mix: { ring: 2, twin: 1, spiral: 5, cluster: 1 }, layout: ['twist', 'bundle', 'twist', 'swap', 'twist', 'bundle'] },
+  canyon: { key: 'canyon', name: 'Solar Canyon', sub: 'Switchbacks and hard rings.', theme: 'solar', mix: { ring: 5, twin: 3, spiral: 1, cluster: 1 }, layout: ['spread', 'swap', 'spread', 'bundle', 'swap', 'bundle'] },
+  cathedral: { key: 'cathedral', name: 'Prism Cathedral', sub: 'Climbs and drops past glass. Spike fields.', theme: 'prism', mix: { ring: 2, twin: 1, spiral: 2, cluster: 5 }, layout: ['bundle', 'spread', 'bundle', 'twist', 'spread', 'swap'] },
+  storm: { key: 'storm', name: 'Vector Storm', sub: 'Pipes flung far apart, then slammed together.', theme: 'vector', mix: { ring: 3, twin: 3, spiral: 3, cluster: 1 }, layout: ['spread', 'spread', 'bundle', 'spread', 'swap', 'bundle'] },
+  ghost: { key: 'ghost', name: 'Signal Ghost', sub: 'Braids and crossings. Twisting channels.', theme: 'signal', mix: { ring: 2, twin: 2, spiral: 3, cluster: 3 }, layout: ['swap', 'bundle', 'swap', 'twist', 'swap', 'bundle'] },
 };
 const ARENAS = TRACKS;

@@ -3,31 +3,36 @@
 const DT = 1 / 60;                 // fixed 60 Hz simulation tick
 const RACE_SECONDS = 60;           // hard cap: the final collapse guarantees a result by then
 const RACE_TICKS = RACE_SECONDS * 60;
-const BEAT = 60 / 144;             // the soundtrack's beat (144 BPM): gates and crushers move on it
+const BEAT = 60 / 144;             // the soundtrack's beat (144 BPM)
 
-// Sphere + lanes (world units)
+// The pipe: every racer rides the inside wall of their own pipe, split into SEGS positions around it (like Tempest).
+// Position 0 is where everyone starts; +1 is one step to the right.
+const SEGS = 16;
+const TUBE_R = 2.2;                // pipe radius (world units): one position is about 0.86 u wide
 const SPHERE_R = 0.38;
-const LANE_X = 0.8;                // lane centres at ±LANE_X from the rail centre
-const SWAP_TICKS = 6;              // a lane change animates over 100 ms…
-const SWAP_MID = 3;                // …and collision uses the destination lane from its 50% point (50 ms)
-const DEBOUNCE_TICKS = 4;          // taps closer than ~65 ms to the last accepted tap are ignored
-const BUFFER_TICKS = 5;            // a tap during a lane change is held ~80 ms and runs when the change ends
+const STEP_TICKS = 4;              // one step to the next position takes 67 ms…
+const STEP_MID = 2;                // …and collision uses the new position from its midpoint (33 ms in)
+const QUEUE_MAX = 3;               // steps pressed while moving are queued (up to 3) and run back to back
 const ORB_R = 0.32;
+const segWrap = (k) => ((k % SEGS) + SEGS) % SEGS;
+const segDist = (a, b) => { const d = segWrap(b - a); return d > SEGS / 2 ? d - SEGS : d; }; // signed shortest steps a → b
 
-// Forward speed is the game's, never the player's: 20 u/s at the start, +0.25 u/s every second, 35 at the cap.
+// Forward speed is the game's: 20 u/s at the start, +0.25 u/s every second, 35 at the cap. Only strips you choose
+// to take, and items (yours, or one fired at you), change a racer's speed.
 const speedAt = (t) => Math.min(35, 20 + 0.25 * t);
 
-// One input = one integer per sphere per tick: bit 0 = a tap this tick. Nothing else exists.
-const TAP = 1;
+// One input = one integer per sphere per tick: bit 0 = step left, bit 1 = step right, bit 2 = use the held item.
+const IN_L = 1, IN_R = 2, IN_USE = 4;
+const TAP = IN_R; // (old name, kept for tools)
 const IDLE_INPUT = 0;
-function packInput(inp) { return inp && inp.tap ? TAP : 0; }
-function unpackInput(p) { return { tap: ((p >>> 0) & TAP) === TAP }; }
+function packInput(inp) { return (inp && inp.left ? IN_L : 0) | (inp && inp.right ? IN_R : 0) | (inp && inp.use ? IN_USE : 0); }
+function unpackInput(p) { p >>>= 0; return { left: !!(p & IN_L), right: !!(p & IN_R), use: !!(p & IN_USE) }; }
 
 const ROSTER = [
   ['Cyan', '#22E6FF', '●'], ['Magenta', '#FF3DCB', '▲'], ['Acid', '#B6FF3B', '■'], ['Solar', '#FF9F1C', '◆'],
 ];
 const BOT_NAMES = ['Vex', 'Nyx', 'Ion', 'Kilo', 'Rune', 'Zed', 'Halo', 'Pulse', 'Echo', 'Flux'];
-// Computer players: skill = timing precision + reading of decoys. Kept a notch below a good human.
+// Computer players: skill = reaction time, precision and judgement. Kept a notch below a good human.
 const BOT_SKILL = [0.55, 0.82];
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));

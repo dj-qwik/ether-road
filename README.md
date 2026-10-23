@@ -1,8 +1,9 @@
 # Ether Road
 
-A one-tap neon survival race for 2–4 players in the browser. Every racer rolls a glowing sphere down their own
-two-lane road; the roads braid, cross and merge in a 3D void. One tap switches lanes. **Last sphere alive wins
-90% of the pot**, escrowed in ETH on **Robinhood Chain** (testnet `46630` now, mainnet `4663` later). Wallets via
+A neon survival race for 2–4 players in the browser, somewhere between Tempest and S.T.U.N. Runner. Every racer
+rolls a glowing sphere down the inside of their own see-through pipe; the pipes braid round each other in a 3D
+void, so you always see where the others are. Slide left and right round the pipe wall to dodge the spikes, grab a
+weapon from the pickup caches, and use it. **Last sphere alive wins 90% of the pot**, escrowed in ETH on **Robinhood Chain** (testnet `46630` now, mainnet `4663` later). Wallets via
 **Privy** (Google or email sign-in only), multiplayer on **Render**. A race lasts **at most 60 seconds**.
 
 Built on the Hot Shots stack: the same escrow, co-signers, Privy bridge and server-authoritative netcode, with a
@@ -34,25 +35,26 @@ path (Safe admin, KMS keys, co-signers on separate infrastructure, an audit) is 
 
 | | |
 |---|---|
-| Control | One tap (Space, any arrow, click, touch, controller button) toggles lanes. A lane change animates over 100 ms; collision uses the new lane from its 50% point. Taps within 65 ms are ignored; a tap during a change is held 80 ms. |
-| Speed | The game's, never the player's: 20 u/s at the start, +0.25 u/s per second, 35 u/s at the cap. |
-| Course | Built from the race seed (two committed random draws). One hazard only: **red spikes** — a short cluster or a long row that closes a lane. Lots of back and forth: most spikes flip to the other lane, and switch windows tighten as the race goes on. Every racer gets the same road, mirrored for half of them, so every road is exactly as hard. A flawless driver must be able to finish every course or it is rebuilt. |
-| Pacing | Switch windows tighten from 0.55 s to 0.055 s; first elimination typically around 25 s, races usually decided by 50–57 s. **Final collapse** at 48 s. |
-| Tracks | Six, dealt from a shuffled deck so all six come up before any repeats: **Nebula Run**, **Ion Helix**, **Solar Canyon**, **Prism Cathedral**, **Vector Storm**, **Signal Ghost**. Each has its own rail shapes, look, and how often spikes run into long rows; the difficulty schedule is the same on all of them. |
-| Equal rails | Every racer's rail has its own curves, but all rails are exactly as long as each other over every 96-unit stretch and over the whole race (rails that come out shorter get a gentle rolling hill and S-bend, solved to match). `tools/tracks.mjs` checks it: worst mismatch 0.3% per stretch, 0.01% over a race. Everyone rolls at the same base speed; only a strip you choose to take changes yours. |
-| Power-ups | Shield (the next hit passes through you), Magnet (orbs in both lanes for 4 s), Double (orbs count ×2 for 6 s). Each sits at the same track position for every racer, in the risky lane between two hazards, at fixed times (11, 24, 33, 42 s, first fitting gap). Effects are fixed, nothing is random. |
-| Speed strips | Two **boost** strips (cyan arch: ×1.4 speed for 2.2 s) and two **slow** strips (amber arch: ×0.65 for 2.2 s) per course. Each covers one lane, sits at the same track position on every racer's road (mirrored lane), always in a clear gap between spikes in the lane you're *not* riding at that moment, so taking one is a choice (two taps in, two out) and it is never under spikes. Boost: more distance, less time to react. Slow: more time, less distance. |
-| Result | Last sphere alive wins at once. Still two or more alive at 60 s, or out on the same tick: furthest along wins, then most gold orbs, then fewest taps, then a draw fixed before the start. |
+| Control | Your ball rides the inside wall of a pipe with 16 positions round it. **← / → or A / D** step one position (67 ms per step; hold to keep sliding all the way round). **Space** fires the cannon or uses whatever you are holding. Controller: d-pad, left stick or L1/R1 step, **✕ (PlayStation) / A (Xbox)** uses. Touch: hold the left or right half of the screen, USE button for items. |
+| Speed | The game's, never the player's: 20 u/s at the start, +0.25 u/s per second, 35 u/s at the cap. Only strips you choose and items change it. |
+| Course | Built from the race seed (two committed random draws). One hazard: **red spikes** on the pipe wall: rings with one opening, twin rings with two, rows of spike clusters to weave through, and long spiral sleeves with a glowing channel that twists round the pipe. Openings tighten and jump further as the race goes on. Every racer gets the same course in their own pipe. A flawless driver must be able to finish every course or it is rebuilt. |
+| Pacing | First elimination typically around 30 s; **final collapse** at 48 s narrows the openings to one or two positions. |
+| Tracks | Six, dealt from a shuffled deck: **Nebula Run**, **Ion Helix**, **Solar Canyon**, **Prism Cathedral**, **Vector Storm**, **Signal Ghost**. Each has its own pipe shapes, look and mix of spike patterns; the difficulty schedule is the same on all of them. |
+| Equal pipes | Every racer's pipe has its own curves, but all pipes are exactly as long as each other over every 96-unit stretch and over the whole race (a pipe that comes out shorter gets gentle waves, at most 3.5 u high, solved to match). The pipes never touch: the closest any two get is 5.9 u between centre lines (pipes are 4.4 u wide). `tools/tracks.mjs` checks both. |
+| Pickups | Come in **caches**: 2–3 different items side by side round the pipe, about six caches a race. Roll over the one you want; the rest of that cache vanishes for you, so racers end up carrying different things by choice. What's in each cache and when caches come up are drawn at random from the race seed, and every racer meets the same caches at the same spots. |
+| Items | **Cannon** (2 shots: blows away the next spike group on your position, for you) · **Burst** (an energy shell spreads across the map; every ball it reaches is slowed to 60% for 2 s) · **EMP** (a shockwave runs up all four pipes; every ball ahead it reaches is lifted off the track, shaking, for 1.5 s, then drops onto a free position and rolls on) · **Ether boost** (above top speed and invincible for 3 s) · **Shield** (the next hit, spike, burst or EMP, passes through you) · **Magnet** (orbs 3 positions either side for 4 s) · **Double** (orbs count ×2 for 6 s). You hold one item at a time. |
+| Speed strips | Two **boost** strips (×1.4 for 2.2 s) and two **slow** strips (×0.65 for 2.2 s) per course, each one position wide, off the safe line and never under spikes, at the same spot on every racer's pipe. Taking one is a choice. |
+| Result | Last sphere alive wins at once. Still two or more alive at 60 s, or out on the same tick: furthest along wins, then most gold orbs, then fewest steps, then a draw fixed before the start. |
 
 `node game/tools/accept.mjs` checks all of that with scripted drivers at 150 / 220 / 300 / 400 ms reactions:
 
 ```
-PACING 4 × 220 ms: race length median 52 s · p90 59 s · first out median 25 s
 SOLVABLE flawless driver crashed in 0/200 courses
-FAIR seat wins 101/97/97/105
-EXPLOIT idle / mashing / metronome taps / random taps: 0% wins each
-SKILL wins by reaction time 150 ms 67% · 220 ms 21% · 300 ms 9% · 400 ms 4%
-TRACK each of the six: median 46–56 s, first out 23–33 s, ~3 power-ups per race
+FAIR seat wins 98/101/99/102 (chi² 0.1)
+EXPLOIT idle / hold right / hold left / wiggle / random presses / spam use: 0% wins each
+SKILL wins by reaction time 150 ms 74% · 220 ms 24% · 300 ms 2% · 400 ms 1%
+PICKUPS 200/200 courses ok · 6.3 caches per course · racers picked different items in 169/200 races
+ITEMS cannon, burst, EMP, ether boost all used and landing; ether boost: 30/30 never died while invincible
 ```
 
 ## Practice, test lab, controllers, skins
@@ -60,29 +62,30 @@ TRACK each of the six: median 46–56 s, first out 23–33 s, ~3 power-ups per r
 - **Practice** races computer players (Easy / Normal / Sharp / Flawless) on a fresh road, entirely in the browser.
 - **Test lab** (yours): open the site once with `#lab` at the end of the address (e.g. `https://…onrender.com/#lab`);
   a *Test lab* button then stays on that browser's home screen. Pick track, look, seed, start time (0–55 s),
-  speed (0.25–4×), racers, computer level, invincible, autopilot. In a lab race: `R` restart same
-  road · `N` new road · `T` next track · `J` skip 5 s · `F` speed · `G` invincible · `P` autopilot · `Esc` lab.
+  speed (0.25–4×), racers, computer level, start holding an item, invincible, autopilot. In a lab race: `R` restart
+  same course · `N` new course · `T` next track · `J` skip 5 s · `F` speed · `G` invincible · `P` autopilot ·
+  `I` give yourself the next item · `Esc` lab.
   It is local only and can't touch online or paid races.
-- **Controllers** (Xbox, PlayStation, Switch Pro, most others): any face button, bumper, trigger or d-pad press
-  switches lanes; in menus the d-pad/left stick moves, A (✕) picks, B (○) goes back, Start presses the main
-  button, Back/Select opens the test lab. Rumble on crashes, shield hits and power-ups where the browser supports it.
+- **Controllers** (Xbox, PlayStation, Switch Pro, most others): d-pad, left stick or L1/R1 step round the pipe,
+  ✕ / A fires or uses your item; in menus the d-pad/left stick moves, ✕ / A picks, ○ / B goes back, Start presses
+  the main button, Back/Select opens the test lab. Rumble on crashes, hits and pickups where the browser supports it.
 - **Sphere skins**: 24 looks, all the same size and handling. Saved per browser and shown to everyone online;
   your racer colour still marks your rail, halo and name tag.
 
 ## Keeping your ball in sight
 
-- Your own road, spikes, pickups and ball are drawn last, on top of everything; nothing from another track can
-  cover them. Another track that swings within 9 u of the camera isn't drawn at all.
-- Rivals' spikes and pickups aren't drawn (they can't hurt you); you see their rails and balls only.
-- A rival ball that would appear on screen inside your road's outline (from just behind your ball to 80 u ahead,
-  from the road surface up to above your ball) isn't drawn, so no other ball can ever seem to be in your lane.
-  It reappears once it has been clear for 0.35 s.
-- A ring of your colour sits on the road under your ball. When you're out, all of this follows the racer you're watching.
+- The camera rides inside your pipe and rolls with your ball, so your ball always sits at the bottom of the screen.
+- Your own pipe, its spikes and pickups and your ball are drawn last, on top of everything; nothing from another
+  pipe can cover them. The other pipes glow through your pipe's glass so you can see where they are.
+- Rivals' spikes and pickups aren't drawn (they can't hurt you); you see their pipes and balls only.
+- A rival ball that would appear on screen over the floor of your pipe around your ball isn't drawn, so no other
+  ball can ever seem to be in your pipe. It reappears once it has been clear for 0.35 s.
+- A ring of your colour sits on the wall under your ball. When you're out, all of this follows the racer you're watching.
 
 ## How it is built
 
 ```
-game/src/sim/        deterministic race simulation (server, every browser, co-signers): course generator, lane controller, track-coordinate collisions, computer drivers
+game/src/sim/        deterministic race simulation (server, every browser, co-signers): course generator, pipe stepping, items, track-coordinate collisions, computer drivers
 game/src/*.js        browser client: 00 input + synthesized 144 BPM soundtrack, 20 three.js world, 90 menus + HUD, 95 online play, 96 real-money UI
 game/vendor/         three.js r170 (MIT) + bloom passes, served from the game's own origin
 game/server/         Node + ws: matchmaking, the authoritative 60 Hz race, sign-in, cash lobbies, /status
@@ -93,10 +96,10 @@ apps/web/            Privy bridge (`/wallet/wallet.js`, `window.ERWallet`)
 ```
 
 **Netcode.** The server simulates race tick *k* nine ticks (150 ms) after tick *k*'s moment on the shared clock.
-Browsers stamp each tap with the tick the player was looking at, so with up to 150 ms one-way latency a tap lands
-on exactly that tick (`nettest` at 120 ± 60 ms: every tap on its stamped tick). Later taps land on the next open
-tick; nothing can be applied to a tick that has already been simulated. Browsers replay the server's confirmed
-stream and draw your own sphere ahead of it (confirmed state + your unconfirmed taps, re-predicted every frame).
+Browsers stamp each action (step left, step right, use) with the tick the player was looking at, so with up to
+150 ms one-way latency it lands on exactly that tick. Later actions land on the next open tick; nothing can be
+applied to a tick that has already been simulated. Browsers replay the server's confirmed stream and draw your own
+sphere ahead of it (confirmed state + your unconfirmed steps, re-predicted every frame).
 
 **Money.** Lobbies are on-chain matches: open → deposits → lock → race → evidence + full input replay published →
 two co-signers re-run the race simulation from the inputs and sign only if they get the same winner → the escrow

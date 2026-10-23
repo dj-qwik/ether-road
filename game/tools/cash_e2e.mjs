@@ -98,7 +98,7 @@ function player(key, name) {
   P.loop = setInterval(() => {
     if (!P.at || P.done) return
     const k = Math.floor((Date.now() - P.at) / (1000 / 60)) + 1
-    if (k >= P.next) { send({ t: 'tap', k }); P.next = k + 9 + Math.floor(Math.random() * 25) }
+    if (k >= P.next) { send({ t: 'in', k, a: Math.random() < 0.5 ? 'L' : 'R' }); if (Math.random() < 0.15) send({ t: 'in', k, a: 'U' }); P.next = k + 9 + Math.floor(Math.random() * 25) }
   }, 8)
   return P
 }

@@ -18,28 +18,43 @@ let wallet = (() => { const v = store.get('er_test_wallet'); try { return v ? Bi
 function setWallet(v) { wallet = v; store.set('er_test_wallet', v.toString()); const el = $('#bal'); if (el) el.textContent = fmtEth(v); }
 const isTouch = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 
-// ───────────────────────── INPUT: one action, a tap ─────────────────────────
-// Space (remappable), any arrow, A/D, a click or touch anywhere outside the menus, or a controller button.
-const INPUT = { taps: [], key: store.get('er_key') || 'Space', enabled: false };
-function tapNow() { if (INPUT.enabled) INPUT.taps.push(performance.now()); }
+// ───────────────────────── INPUT: step left, step right, use ─────────────────────────
+// Keyboard: ← / A step left, → / D step right (hold to keep sliding round the pipe), Space uses the held item.
+// Touch: tap the left or right half of the screen to step, the USE button to use. Controller: d-pad, left stick or
+// bumpers step; ✕ (PlayStation) / A (Xbox) uses. Each action is time-stamped when pressed; the race reads them in order.
+const INPUT = { acts: [], enabled: false, hold: { L: 0, R: 0 }, rep: { L: 0, R: 0 } };
+const HOLD_DELAY = 170, HOLD_EVERY = 67; // ms: hold a direction and the ball keeps stepping, one position per 67 ms
+function actNow(a) { if (INPUT.enabled) INPUT.acts.push([performance.now(), a]); }
+function holdStart(d) { if (!INPUT.hold[d]) { INPUT.hold[d] = performance.now(); INPUT.rep[d] = INPUT.hold[d] + HOLD_DELAY; actNow(d); } }
+function holdEnd(d) { INPUT.hold[d] = 0; }
+function pollHolds(now) {
+  for (const d of ['L', 'R']) if (INPUT.hold[d] && !INPUT.hold[d === 'L' ? 'R' : 'L']) while (now >= INPUT.rep[d]) { if (INPUT.enabled) INPUT.acts.push([INPUT.rep[d], d]); INPUT.rep[d] += HOLD_EVERY; }
+}
+const KEY_DIR = { ArrowLeft: 'L', KeyA: 'L', ArrowRight: 'R', KeyD: 'R' };
+const keySrc = { L: new Set(), R: new Set() }; // which keys/buttons are holding each direction
+function srcDown(d, id) { keySrc[d].add(id); holdStart(d); }
+function srcUp(d, id) { keySrc[d].delete(id); if (!keySrc[d].size) holdEnd(d); }
 addEventListener('keydown', (e) => {
-  if (e.repeat || e.target.closest?.('input, textarea')) return;
-  const k = e.code;
-  if (k === INPUT.key || k === 'Space' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'KeyA' || k === 'KeyD') {
-    if (INPUT.enabled) { e.preventDefault(); tapNow(); }
-  }
+  if (e.target.closest?.('input, textarea')) return;
+  const d = KEY_DIR[e.code];
+  if (d) { if (INPUT.enabled) e.preventDefault(); if (!e.repeat) srcDown(d, e.code); return; }
+  if (e.code === 'Space') { if (INPUT.enabled) { e.preventDefault(); if (!e.repeat) actNow('U'); } }
 });
+addEventListener('keyup', (e) => { const d = KEY_DIR[e.code]; if (d) srcUp(d, e.code); });
+addEventListener('blur', () => { for (const d of ['L', 'R']) { keySrc[d].clear(); holdEnd(d); } });
+const touchDir = new Map();
 addEventListener('pointerdown', (e) => {
   if (!INPUT.enabled || e.target.closest('.card, button, header, a, input, .wallet')) return;
-  tapNow();
+  const d = e.clientX < innerWidth / 2 ? 'L' : 'R'; touchDir.set(e.pointerId, d); srcDown(d, 'p' + e.pointerId);
 }, { passive: true });
-// ── controllers (standard mapping: Xbox, PlayStation, Switch Pro, 8BitDo…). In a race any face button, bumper,
-// trigger or d-pad press switches lanes. In menus: d-pad / left stick moves between buttons, A (✕) presses,
-// B (○) goes back, Start presses the main button. Rumble on crashes, shield hits and power-ups where supported.
-const PAD = { connected: false, prev: [], navAt: 0, lastDir: '', used: false };
+for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, (e) => { const d = touchDir.get(e.pointerId); if (d) { touchDir.delete(e.pointerId); srcUp(d, 'p' + e.pointerId); } }, { passive: true });
+// ── controllers (standard mapping: Xbox, PlayStation, Switch Pro, 8BitDo…). In a race: d-pad ←/→, the left stick or
+// L1/R1 step; ✕ / A uses the held item. In menus: d-pad / left stick moves between buttons, ✕ / A presses,
+// ○ / B goes back, Start presses the main button. Rumble on crashes, hits and pickups where supported.
+const PAD = { connected: false, prev: [], navAt: 0, lastDir: '', used: false, stick: [] };
 addEventListener('gamepadconnected', () => { PAD.connected = true; document.body.classList.add('pad'); });
 addEventListener('gamepaddisconnected', () => { PAD.connected = [...(navigator.getGamepads ? navigator.getGamepads() : [])].some(Boolean); document.body.classList.toggle('pad', PAD.connected); });
-const RACE_BUTTONS = [0, 1, 2, 3, 4, 5, 6, 7, 12, 13, 14, 15];
+const PAD_LEFT = [14, 4], PAD_RIGHT = [15, 5], PAD_USE = [0];
 function padRumble(strength = 0.5, ms = 120) {
   for (const p of navigator.getGamepads ? navigator.getGamepads() : []) {
     const v = p && p.vibrationActuator; if (!v) continue;
@@ -54,7 +69,15 @@ function pollPad() {
     const edge = (k) => now[k] && !prev[k];
     PAD.prev[pi] = now;
     if (now.some(Boolean) && !PAD.used) { PAD.used = true; PAD.connected = true; document.body.classList.add('pad'); }
-    if (INPUT.enabled) { if (RACE_BUTTONS.some(edge)) { tapNow(); } continue; }
+    if (INPUT.enabled) {
+      const sx = p.axes[0] || 0, was = PAD.stick[pi] || 0, st = sx < -0.5 ? -1 : sx > 0.5 ? 1 : Math.abs(sx) < 0.35 ? 0 : was;
+      const want = { L: PAD_LEFT.some((k) => now[k]) || st < 0, R: PAD_RIGHT.some((k) => now[k]) || st > 0 };
+      PAD.stick[pi] = st;
+      for (const d of ['L', 'R']) { const id = 'pad' + pi; if (want[d] && !keySrc[d].has(id)) srcDown(d, id); else if (!want[d] && keySrc[d].has(id)) srcUp(d, id); }
+      if (PAD_USE.some(edge)) actNow('U');
+      continue;
+    }
+    for (const d of ['L', 'R']) srcUp(d, 'pad' + pi);
     // menus
     const ax = p.axes[0] || 0, ay = p.axes[1] || 0;
     const dir = now[12] || ay < -0.6 ? 'up' : now[13] || ay > 0.6 ? 'down' : now[14] || ax < -0.6 ? 'left' : now[15] || ax > 0.6 ? 'right' : '';

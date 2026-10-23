@@ -3,8 +3,8 @@
 // every tick's inputs (and the random draws the tick consumed) so browsers can replay it exactly.
 //
 // Latency: race tick k belongs to the moment at + k·TICK on the shared clock, but the server simulates it D ticks
-// later. A tap stamped with the tick the player was looking at therefore arrives in time and lands on exactly
-// that tick (up to D·TICK ≈ 150 ms of one-way latency). Later taps land on the next tick still open. A tap can
+// later. An action stamped with the tick the player was looking at therefore arrives in time and lands on exactly
+// that tick (up to D·TICK ≈ 150 ms of one-way latency). Later actions land on the next tick still open. An action can
 // never be applied to a tick that has already been simulated, so nobody can rewrite the past.
 import crypto from 'node:crypto'
 import { keccak256 } from 'viem'
@@ -21,7 +21,7 @@ export const T = {
   HASH_EVERY: 60, // state fingerprint once a second for desync detection
   MAX_CATCHUP: 12,
 }
-const TAP = 1
+const ACT_BIT = { L: 1, R: 2, U: 4 } // step left, step right, use item (src/sim/01_base.js IN_L / IN_R / IN_USE)
 // Race seeds come from 32 random bytes: the commitment keccak256(reveal) can't be brute-forced, and the
 // simulation seed is derived from the reveal so anyone holding the replay can re-run the race.
 const DECK = []
@@ -148,7 +148,8 @@ export class Match {
       const s = this.seats[b.i]
       if (s.kind === 'bot') continue // the race's own driver plays it (server-side RNG stream); result is broadcast
       let p = 0
-      if (s.taps.length && s.taps[0] <= k) { s.taps.shift(); p = TAP } // one tap per tick; the rest wait their turn
+      // at most one step and one use per tick, in the order pressed; the rest wait their turn
+      while (s.taps.length && s.taps[0][0] <= k) { const bit = s.taps[0][1]; if (bit === 4 ? p & 4 : p & 3) break; p |= bit; s.taps.shift() }
       inputs[b.i] = p
     }
     const w = R.step(inputs)
@@ -182,14 +183,15 @@ export class Match {
   }
 
   // ───────────── players' messages
-  /** A tap stamped with race tick k. Ticks already simulated are closed: the tap waits for the next open one. */
-  tap(seat, k) {
-    k = Math.floor(Number(k))
+  /** An action ('L' | 'R' | 'U') stamped with race tick k. Ticks already simulated are closed: it waits for the next open one. */
+  act(seat, k, a) {
+    k = Math.floor(Number(k)); const bit = ACT_BIT[a]
+    if (!bit) return
     if (!(k >= 1) || this.state === 'lobby' || this.state === 'champ' || this.state === 'closed') return
     const R = this.round; if (!R || R.winner) return
     if (k > R.tick + T.DELAY_TICKS + 240) return // stamped far in the future (clock nonsense): drop
-    if (seat.taps.length >= 16) return
-    seat.taps.push(Math.max(k, R.tick + 1)); seat.taps.sort((a, b) => a - b)
+    if (seat.taps.length >= 24) return
+    seat.taps.push([Math.max(k, R.tick + 1), bit, (this.seq = (this.seq || 0) + 1)]); seat.taps.sort((a, b) => a[0] - b[0] || a[2] - b[2])
   }
   disconnect(seat) {
     if (this.state === 'lobby') return this.leaveLobby(seat)

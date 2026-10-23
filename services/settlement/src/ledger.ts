@@ -51,7 +51,7 @@ export interface Ledger {
   auditLog(): Promise<AuditEvent[]>
 }
 
-export const POLICY_VERSION = 'etherroad-rules-v1'
+export const POLICY_VERSION = 'etherroad-rules-v2'
 export const GENESIS_HASH = keccak256(stringToHex('etherroad-audit-genesis'))
 
 const json = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))

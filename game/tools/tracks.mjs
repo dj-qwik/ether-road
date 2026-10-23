@@ -1,8 +1,9 @@
-// Every racer's rail must be exactly as long as everyone else's, chunk by chunk, on every track.
+// Every racer's pipe must be exactly as long as everyone else's, chunk by chunk, on every track, and no two pipes
+// may ever touch (centre lines at least 2 × radius + a gap apart).
 //   node tools/tracks.mjs [races-per-track=3]
 import { loadClient } from './client.mjs'
 const C = loadClient(), PER = +(process.argv[2] || 3)
-let worst = 0, worstTotal = 0, fails = 0
+let worst = 0, worstTotal = 0, fails = 0, closest = 1e9
 for (const key of Object.keys(C.SIM0.TRACKS)) {
   let bump = 0, total = 0
   for (let r = 0; r < PER; r++) {
@@ -19,9 +20,17 @@ for (const key of Object.keys(C.SIM0.TRACKS)) {
     const tot = drawn.map((L) => L.reduce((a, b) => a + b, 0)); total = tot[0]
     worstTotal = Math.max(worstTotal, (Math.max(...tot) - Math.min(...tot)) / Math.max(...tot))
     bump = Math.max(bump, ...rails.map((rl) => rl.bump))
+    // separation: every 1 u of each pipe against every 1 u of every other pipe within 150 u
+    const SK = Math.round(1 / C.RAILGEO.STEP), W = 150 * SK
+    for (let a = 0; a < n; a++) for (let b = a + 1; b < n; b++) {
+      const A = rails[a].pos, B = rails[b].pos, N = rails[a].N
+      for (let i = 0; i < N; i += SK) for (let j = Math.max(0, i - W); j < Math.min(N, i + W); j += SK) {
+        const d = Math.hypot(A[i * 3] - B[j * 3], A[i * 3 + 1] - B[j * 3 + 1], A[i * 3 + 2] - B[j * 3 + 2]); if (d < closest) closest = d
+      }
+    }
   }
-  console.log(`${key.padEnd(10)} rail length ${total.toFixed(0)} u · tallest equalizing hill ${bump.toFixed(2)} u`)
+  console.log(`${key.padEnd(10)} pipe length ${total.toFixed(0)} u · biggest equalizing bulge ${bump.toFixed(2)} u · closest pipes so far ${closest.toFixed(2)} u apart`)
 }
-const ok = worstTotal < 0.001 && worst < 0.01
-console.log(`${ok ? 'PASS' : 'FAIL'} equal rails: worst per-chunk mismatch ${(worst * 100).toFixed(3)}% · worst whole-race mismatch ${(worstTotal * 100).toFixed(4)}%`)
+const minSep = 2 * C.SIM0.TUBE_R + 0.5, ok = worstTotal < 0.001 && worst < 0.01 && closest >= minSep
+console.log(`${ok ? 'PASS' : 'FAIL'} pipes never touch: closest centre lines ${closest.toFixed(2)} u (need ≥ ${minSep.toFixed(1)}) · equal pipes: worst per-chunk mismatch ${(worst * 100).toFixed(3)}% · worst whole-race mismatch ${(worstTotal * 100).toFixed(4)}%`)
 process.exit(ok ? 0 : 1)

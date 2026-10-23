@@ -237,7 +237,7 @@ function handle(conn, m) {
       conn.match = null; conn.seat = null; S.match = null; S.seat = null
       return conn.sendJson({ t: 'left' })
     }
-    case 'tap': if (conn.match && conn.seat) conn.match.tap(conn.seat, m.k); return
+    case 'in': if (conn.match && conn.seat) conn.match.act(conn.seat, m.k, m.a); return
     case 'ready': if (conn.match && conn.seat) conn.match.ready(conn.seat); return
     case 'resync': if (conn.match && conn.seat) conn.sendJson(conn.match.syncMsg(conn.seat)); return
   }
