@@ -20,6 +20,9 @@ const ITEM_LOOK = {
   cannon: { color: '#FF9F43', name: 'Cannon' }, burst: { color: '#FF4FD8', name: 'Burst' }, emp: { color: '#F5FF4A', name: 'EMP' }, ether: { color: '#DFFFFF', name: 'Ether boost' },
 };
 const VIEW_AHEAD = 190, VIEW_BEHIND = 6;
+// neon: the pipe lines are drawn brighter than white (HDR) so the bloom picks them up; the bloom only catches what's
+// brighter than its threshold, so the glass, the spikes and your ball stay crisp
+const GLOW = { bloom: 0.75, radius: 0.5, threshold: 0.78, own: 1.6, other: 2.6, pulse: 0.25 };
 const smooth = (x) => { x = clamp(x, 0, 1); return x * x * (3 - 2 * x); };
 const segAngle = (x) => -Math.PI / 2 + (2 * Math.PI * x) / SEGS; // position round the pipe → angle (0 = bottom, +1 = one step right)
 const WORLD = (() => {
@@ -104,7 +107,7 @@ const WORLD = (() => {
     const mine = new T.RenderPass(scene, camera); mine.clear = false; mine.clearDepth = true;
     const draw = mine.render.bind(mine); mine.render = (...a) => { const bg = scene.background; scene.background = null; draw(...a); scene.background = bg; };
     composer.addPass(mine);
-    bloom = new T.UnrealBloomPass(new T.Vector2(512, 512), 0.26, 0.3, 0.7);
+    bloom = new T.UnrealBloomPass(new T.Vector2(512, 512), GLOW.bloom, GLOW.radius, GLOW.threshold);
     if (location.hash.includes('nobloom')) bloom.enabled = false;
     composer.addPass(bloom);
     composer.addPass(new T.OutputPass());
@@ -501,7 +504,10 @@ const WORLD = (() => {
     guardLane(rl, sNow, x, followSp, now);
     W.key.position.set(cam.pos.x + 4, cam.pos.y + 10, cam.pos.z + 6); W.key.target.position.set(cam.look.x, cam.look.y, cam.look.z);
     if (theme.shift) { const c = new T.Color().setHSL((now * 0.02) % 1, 0.7, 0.045, T.SRGBColorSpace); scene.fog.color.copy(c); scene.background.copy(c); }
-    bloom.strength = 0.26 + (t > COLLAPSE_AT && view.phase === 'play' ? 0.1 : 0) + (view.phase === 'done' ? 0.12 : 0);
+    bloom.strength = GLOW.bloom + (t > COLLAPSE_AT && view.phase === 'play' ? 0.08 : 0) + (view.phase === 'done' ? 0.1 : 0);
+    // the pipes breathe with the music: a soft surge on every beat, decaying before the next
+    const beat = t > 0 ? (t / BEAT) % 1 : 0.99, surge = 1 + GLOW.pulse * Math.exp(-beat * 5);
+    for (const r of race.rails) { r.ownMat.color.setScalar(GLOW.own * surge); r.otherMat.color.setScalar(GLOW.other * surge); }
     render(dt);
   }
   // the camera rides a smoothed line through the pipe: each of its points (and its "up") is the average of the pipe
